@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Test execution context that holds runtime information
+#[derive(Clone)]
 pub struct TestContext {
     /// Base directory for test files (for resolving relative paths)
     pub base_dir: std::path::PathBuf,

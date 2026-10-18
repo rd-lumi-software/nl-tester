@@ -1,0 +1,5 @@
+mode: mock
+adapter: cloud_mock
+evidenceTier: mock_contract
+initialState:
+  service: ready

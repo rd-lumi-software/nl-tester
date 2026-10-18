@@ -1,0 +1,13 @@
+app:
+  platform: android
+  appId: com.lumi.lumilife
+gateway:
+  platform: lumi_hc
+  profile: profiles/hc-real-unavailable.yaml
+---
+- runFlow:
+    path: app.yaml
+    target: app
+- runFlow:
+    path: gateway-real.yaml
+    target: gateway

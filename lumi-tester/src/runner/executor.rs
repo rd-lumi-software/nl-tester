@@ -53,6 +53,8 @@ pub struct TestExecutor {
     /// (e.g. inside a `repeat` loop) is only read and parsed from disk once per run.
     flow_cache: HashMap<std::path::PathBuf, crate::parser::types::TestFlow>,
     pub healer: crate::runner::healer::SelfHealer,
+    e2e_runtime: Option<tokio::sync::Mutex<crate::e2e::E2eRuntime>>,
+    e2e_blocked: Option<crate::e2e::result::E2eResult>,
 }
 
 /// Resolve `align` and `offset` from TapParams into (x_pct, y_pct) as 0.0..1.0.
@@ -216,6 +218,8 @@ impl TestExecutor {
             auto_power_off: false,
             flow_cache: HashMap::new(),
             healer: crate::runner::healer::SelfHealer::new(true),
+            e2e_runtime: None,
+            e2e_blocked: None,
         }
     }
 
@@ -243,6 +247,89 @@ impl TestExecutor {
     /// Subscribe to test execution events
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<TestEvent> {
         self.emitter.subscribe()
+    }
+
+    async fn prepare_e2e(
+        &mut self,
+        path: &Path,
+        flow: &crate::parser::types::TestFlow,
+    ) -> Result<()> {
+        self.e2e_runtime = None;
+        self.e2e_blocked = None;
+
+        let Some(profile_ref) = flow.profile.as_deref() else {
+            self.e2e_blocked = Some(crate::e2e::result::E2eResult::blocked(
+                crate::e2e::result::E2eCategory::Preflight,
+                "lumi_e2e execution requires a profile",
+            ));
+            return Ok(());
+        };
+        let loaded = match crate::e2e::profile::load_profile(path, profile_ref) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                self.e2e_blocked = Some(crate::e2e::result::E2eResult::error(
+                    crate::e2e::result::E2eCategory::InvalidPayload,
+                    error.to_string(),
+                    crate::e2e::result::EvidenceTier::RealPreflight,
+                ));
+                return Ok(());
+            }
+        };
+
+        let base_url = self.context.substitute_vars(&loaded.profile.endpoint.base_url);
+        let websocket_url = self
+            .context
+            .substitute_vars(&loaded.profile.endpoint.websocket_url);
+        if base_url.contains("${") || websocket_url.contains("${") {
+            self.e2e_blocked = Some(crate::e2e::result::E2eResult::blocked(
+                crate::e2e::result::E2eCategory::NoLab,
+                "lumi_e2e endpoint environment is unavailable; real HC lab execution is blocked",
+            ));
+            return Ok(());
+        }
+
+        match crate::e2e::E2eRuntime::new(
+            &loaded,
+            base_url,
+            websocket_url,
+            std::time::Duration::from_millis(self.context.default_timeout_ms),
+        ) {
+            Ok(runtime) => self.e2e_runtime = Some(tokio::sync::Mutex::new(runtime)),
+            Err(error) => {
+                self.e2e_blocked = Some(crate::e2e::result::E2eResult::blocked(
+                    crate::e2e::result::E2eCategory::NoLab,
+                    format!("lumi_e2e runtime preflight blocked: {error}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn execute_e2e(
+        &mut self,
+        command: &crate::e2e::types::E2eCommand,
+    ) -> Result<()> {
+        let result = if let Some(runtime) = &self.e2e_runtime {
+            let mut runtime = runtime.lock().await;
+            runtime.execute(command).await
+        } else {
+            self.e2e_blocked.clone().unwrap_or_else(|| {
+                crate::e2e::result::E2eResult::blocked(
+                    crate::e2e::result::E2eCategory::NoLab,
+                    "lumi_e2e runtime is not available",
+                )
+            })
+        };
+        let serialized = serde_json::to_string(&result)?;
+        self.emitter.emit(TestEvent::Log {
+            message: format!("E2E result: {serialized}"),
+            depth: self.depth,
+        });
+        if result.status == crate::e2e::result::E2eStatus::Passed {
+            Ok(())
+        } else {
+            anyhow::bail!("E2E result: {serialized}")
+        }
     }
 
     /// Run a single test file
@@ -293,6 +380,16 @@ impl TestExecutor {
 
         // Update context from flow header
         self.context.update_from_flow(&flow);
+
+        if matches!(
+            flow.platform,
+            Some(crate::parser::types::Platform::LumiE2e)
+        ) {
+            self.prepare_e2e(path, &flow).await?;
+        } else {
+            self.e2e_runtime = None;
+            self.e2e_blocked = None;
+        }
 
         // Let the driver know the target app even if `launchApp` itself never runs
         // this session (e.g. `--command-index` re-running a single later command
@@ -5458,6 +5555,8 @@ impl TestExecutor {
                 Ok(())
             }
 
+            TestCommand::E2e(e2e_command) => self.execute_e2e(e2e_command).await,
+
             // Unimplemented commands
             TestCommand::ExportReport(_)
             | TestCommand::Navigate(_)
@@ -5469,6 +5568,25 @@ impl TestExecutor {
                     command.display_name()
                 );
                 Ok(())
+            }
+        }
+    }
+
+    /// Execute one delegated App command while preserving the same failure
+    /// evidence path used by the normal flow runner.
+    pub async fn execute_command_with_failure_artifacts(
+        &mut self,
+        command: &TestCommand,
+        flow_name: &str,
+        command_index: usize,
+    ) -> Result<()> {
+        match self.execute_command(command).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = self
+                    .handle_failure(flow_name, command_index, &error.to_string())
+                    .await;
+                Err(error)
             }
         }
     }
@@ -5943,6 +6061,16 @@ impl TestExecutor {
         }
 
         self.auto_capture_last_time = std::time::Instant::now();
+    }
+
+    /// Finish a delegated App session without taking ownership of aggregate
+    /// multi-target artifacts. The parent target runner writes those once.
+    pub async fn finish_without_artifacts(&mut self) -> Result<()> {
+        self.stop_observe_views();
+        self.session.finish();
+        let summary = self.session.summary();
+        self.emitter.emit(TestEvent::SessionFinished { summary });
+        Ok(())
     }
 
     /// Finish the test session and generate reports

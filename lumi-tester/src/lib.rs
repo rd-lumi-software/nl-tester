@@ -1,7 +1,9 @@
 pub mod ai;
+pub mod adapter;
 pub mod camera;
 pub mod commands;
 pub mod driver;
+pub mod e2e;
 pub mod hardware;
 pub mod inspector;
 pub mod parser;

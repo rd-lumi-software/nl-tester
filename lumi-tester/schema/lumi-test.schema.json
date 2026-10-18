@@ -23,7 +23,27 @@
         "macos",
         "macOS",
         "windows"
+        ,"lumi_e2e"
+        ,"lumi_hc"
+        ,"lumi_cloud"
       ]
+    },
+    "app": {
+      "$ref": "#/$defs/component"
+    },
+    "gateway": {
+      "$ref": "#/$defs/component"
+    },
+    "cloud": {
+      "$ref": "#/$defs/component"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "journey": {
+      "type": "string",
+      "deprecated": true,
+      "description": "Legacy metadata only; target adapters are selected by app/gateway/cloud components."
     },
     "tags": {
       "type": "array",
@@ -106,6 +126,34 @@
     }
   ],
   "$defs": {
+    "component": {
+      "type": "object",
+      "required": ["platform"],
+      "additionalProperties": true,
+      "properties": {
+        "platform": { "type": "string" },
+        "appId": { "type": "string" },
+        "profile": { "type": "string" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "runFlow": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": { "type": "string" },
+        "target": {
+          "type": "string",
+          "enum": ["app", "gateway", "cloud"]
+        },
+        "commands": { "$ref": "#/$defs/commandArray" },
+        "vars": { "$ref": "#/$defs/envMap" },
+        "optional": { "type": "boolean" }
+      }
+    },
     "env": {
       "oneOf": [
         {
@@ -431,6 +479,14 @@
         "rotate",
         "rotateScreen",
         "runFlow",
+        "hcHealth",
+        "hcGetEntities",
+        "hcGetState",
+        "hcControl",
+        "hcWaitState",
+        "wsSubscribe",
+        "wsExpect",
+        "wsSnapshot",
         "runPython",
         "runScript",
         "screenshot",
@@ -504,8 +560,21 @@
         },
         {
           "type": "object",
+          "required": ["runFlow"],
+          "additionalProperties": false,
+          "properties": {
+            "runFlow": {
+              "$ref": "#/$defs/runFlow"
+            }
+          }
+        },
+        {
+          "type": "object",
           "minProperties": 1,
           "maxProperties": 1,
+          "not": {
+            "required": ["runFlow"]
+          },
           "propertyNames": {
             "$ref": "#/$defs/commandName"
           },

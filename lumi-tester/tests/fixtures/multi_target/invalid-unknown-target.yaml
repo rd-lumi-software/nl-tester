@@ -1,0 +1,10 @@
+app:
+  platform: android
+  appId: com.lumi.lumilife
+gateway:
+  platform: lumi_hc
+  profile: profiles/hc.yaml
+---
+- runFlow:
+    path: app.yaml
+    target: satellite

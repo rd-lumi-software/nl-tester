@@ -1,0 +1,5 @@
+platform: ios
+appId: com.lumi.other
+journey: system_journey
+---
+- launchApp

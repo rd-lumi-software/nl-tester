@@ -25,7 +25,7 @@ enum Commands {
         /// Path to test file or directory
         path: PathBuf,
 
-        /// Target platform (android, android_auto, ios, web, macos, windows).
+        /// Target platform (android, android_auto, ios, web, macos, windows, lumi_e2e).
         /// Parsed from file if not provided.
         #[arg(short, long)]
         platform: Option<String>,
@@ -720,6 +720,91 @@ async fn async_main() -> anyhow::Result<()> {
             if let Some(ref s) = speed {
                 std::env::set_var("LUMI_SPEED", s);
             }
+            if path.is_file() {
+                let parsed = lumi_tester::parser::yaml::parse_test_file(&path)?;
+                let is_legacy_hc_flow = matches!(
+                    parsed.platform,
+                    Some(lumi_tester::parser::types::Platform::LumiE2e)
+                );
+                let normalized = lumi_tester::parser::normalize::normalize_flow(parsed, &path)?;
+                let has_non_app_target = normalized
+                    .components
+                    .keys()
+                    .any(|target| *target != lumi_tester::parser::types::TargetId::App);
+                if has_non_app_target && !is_legacy_hc_flow {
+                    lumi_tester::parser::validation::validate_flow_graph(&normalized)?;
+                    let mock_mode = multi_target_mock_mode(&normalized);
+                    let attached_driver = if !mock_mode {
+                        if let Some(app) = normalized
+                            .components
+                            .get(&lumi_tester::parser::types::TargetId::App)
+                        {
+                            runner::create_platform_driver_for_target(
+                                &app.platform,
+                                &device,
+                                speed.as_deref(),
+                            )
+                            .await
+                            .ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let data_records = data
+                        .as_deref()
+                        .map(runner::load_data_records)
+                        .transpose()?
+                        .unwrap_or_default();
+                    let multi_options = lumi_tester::adapter::MultiTargetRunOptions {
+                        continue_on_failure,
+                        snapshot,
+                        report,
+                        events_jsonl,
+                        command_index,
+                        from_command_index,
+                        command_name: command_name.clone(),
+                        repeat,
+                        data_records,
+                    };
+                    let mut target_runner = if mock_mode {
+                        lumi_tester::adapter::MultiTargetRunner::mock_harness(normalized)?
+                            .with_options(multi_options.clone())
+                    } else if let Some(driver) = attached_driver {
+                            lumi_tester::adapter::MultiTargetRunner::standard_with_app_driver_and_options(
+                                normalized,
+                                driver,
+                                &output,
+                                multi_options.clone(),
+                            )?
+                    } else {
+                        lumi_tester::adapter::MultiTargetRunner::standard(normalized)?
+                            .with_options(multi_options.clone())
+                    };
+                    let target_report = target_runner.run()?;
+                    lumi_tester::adapter::MultiTargetRunner::write_artifacts_with_options(
+                        &target_report,
+                        &output,
+                        report,
+                        events_jsonl,
+                    )?;
+                    println!(
+                        "Multi-target status: {:?} ({} operations, evidence: {})",
+                        target_report.status,
+                        target_report.operations.len(),
+                        if mock_mode { "mock_contract" } else { "real_preflight" }
+                    );
+                    match target_report.status {
+                        lumi_tester::adapter::AdapterStatus::Passed if mock_mode => return Ok(()),
+                        lumi_tester::adapter::AdapterStatus::Blocked => {
+                            anyhow::bail!("multi-target runtime BLOCKED; see run.json")
+                        }
+                        lumi_tester::adapter::AdapterStatus::Passed => return Ok(()),
+                        _ => anyhow::bail!("multi-target run did not pass; see run.json"),
+                    }
+                }
+            }
             let platform_val = if let Some(p) = platform {
                 normalize_platform(&p)
             } else {
@@ -770,9 +855,17 @@ async fn async_main() -> anyhow::Result<()> {
                 println!("  Data File: {}", d.display().to_string().cyan());
             }
 
+            // lumi_e2e uses the existing TestExecutor command loop. The runner's
+            // platform driver is only a host lifecycle adapter for this semantic
+            // domain; E2E I/O is owned by the profile-bound runtime in executor.
+            let runner_platform = if platform_val == "lumi_e2e" {
+                "macos"
+            } else {
+                platform_val.as_str()
+            };
             runner::run_tests(
                 &path,
-                &platform_val,
+                runner_platform,
                 if device.is_empty() {
                     None
                 } else {
@@ -829,6 +922,9 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::List { path, json } => {
             let result = list_test_files(&path)?;
             print_list_result(&result, json)?;
+            if !result.errors.is_empty() {
+                anyhow::bail!("list failed with {} error(s)", result.errors.len());
+            }
         }
 
         Commands::RequirementsCoverage { path, cases, json } => {
@@ -1661,12 +1757,18 @@ struct ValidationReport {
 struct ValidationError {
     path: String,
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ListReport {
     files: Vec<ListedFlow>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<ValidationError>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1677,6 +1779,18 @@ struct ListedFlow {
     url: Option<String>,
     platform: Option<lumi_tester::parser::types::Platform>,
     tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    journey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required_capabilities: Option<Vec<lumi_tester::e2e::types::E2eCapability>>,
+    components: std::collections::BTreeMap<
+        lumi_tester::parser::types::TargetId,
+        lumi_tester::parser::types::ComponentSpec,
+    >,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<lumi_tester::parser::types::Diagnostic>,
     command_count: usize,
     commands: Vec<ListedCommand>,
 }
@@ -1686,6 +1800,10 @@ struct ListedFlow {
 struct ListedCommand {
     index: usize,
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capabilities: Option<Vec<lumi_tester::e2e::types::E2eCapability>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<lumi_tester::parser::types::TargetId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1713,17 +1831,11 @@ fn validate_test_files(path: &std::path::Path) -> ValidationReport {
             for file in paths {
                 match parse_listed_flow(&file) {
                     Ok(flow) => files.push(flow),
-                    Err(error) => errors.push(ValidationError {
-                        path: file.display().to_string(),
-                        error: error.to_string(),
-                    }),
+                    Err(error) => errors.push(make_validation_error(&file, error)),
                 }
             }
         }
-        Err(error) => errors.push(ValidationError {
-            path: path.display().to_string(),
-            error: error.to_string(),
-        }),
+        Err(error) => errors.push(make_validation_error(path, error)),
     }
 
     ValidationReport {
@@ -1734,12 +1846,31 @@ fn validate_test_files(path: &std::path::Path) -> ValidationReport {
 }
 
 fn list_test_files(path: &std::path::Path) -> anyhow::Result<ListReport> {
-    let files = collect_test_files(path)?
-        .into_iter()
-        .map(|file| parse_listed_flow(&file))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut files = Vec::new();
+    let mut errors = Vec::new();
+    for file in collect_test_files(path)? {
+        match parse_listed_flow(&file) {
+            Ok(flow) => files.push(flow),
+            Err(error) => errors.push(make_validation_error(&file, error)),
+        }
+    }
 
-    Ok(ListReport { files })
+    Ok(ListReport { files, errors })
+}
+
+fn make_validation_error(path: &std::path::Path, error: anyhow::Error) -> ValidationError {
+    let e2e = error.downcast_ref::<lumi_tester::e2e::E2eValidationError>();
+    let flow = error.downcast_ref::<lumi_tester::parser::validation::FlowValidationError>();
+    let normalization = error.downcast_ref::<lumi_tester::parser::normalize::NormalizationError>();
+    ValidationError {
+        path: path.display().to_string(),
+        error: error.to_string(),
+        code: e2e
+            .map(|error| error.code().to_string())
+            .or_else(|| flow.map(|error| error.code().to_string()))
+            .or_else(|| normalization.map(|error| error.code().to_string())),
+        field: e2e.and_then(|error| error.field().map(str::to_string)),
+    }
 }
 
 fn collect_test_files(path: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -1777,6 +1908,25 @@ fn collect_test_files(path: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
 
 fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
     let flow = lumi_tester::parser::yaml::parse_test_file(path)?;
+    let normalized = lumi_tester::parser::normalize::normalize_flow(flow.clone(), path)?;
+    lumi_tester::parser::validation::validate_flow_graph(&normalized)?;
+    // A multi-target parent is validated by the recursive target graph. The
+    // HC profile validator applies only to a file that actually contains HC
+    // commands; otherwise runFlow itself is a valid orchestration command.
+    let e2e_metadata = if flow
+        .commands
+        .iter()
+        .any(|command| matches!(command, lumi_tester::parser::types::TestCommand::E2e(_)))
+    {
+        lumi_tester::e2e::validate_flow(path, &flow)?
+    } else {
+        lumi_tester::e2e::E2eFlowMetadata {
+            profile_ref: String::new(),
+            profile_path: PathBuf::new(),
+            required_capabilities: Vec::new(),
+            command_requirements: Vec::new(),
+        }
+    };
     let commands = flow
         .commands
         .iter()
@@ -1784,6 +1934,19 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
         .map(|(index, command)| ListedCommand {
             index,
             name: command.display_name(),
+            capabilities: match command {
+                lumi_tester::parser::types::TestCommand::E2e(e2e_command) => {
+                    Some(e2e_command.required_capabilities())
+                }
+                _ => None,
+            },
+            target: match command {
+                lumi_tester::parser::types::TestCommand::RunFlow(params) => {
+                    params.clone().into_inner().target
+                }
+                _ => normalized.components.keys().next().copied()
+                    .filter(|_| normalized.components.len() == 1),
+            },
         })
         .collect::<Vec<_>>();
 
@@ -1793,6 +1956,15 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
         url: flow.url,
         platform: flow.platform,
         tags: flow.tags,
+        journey: flow.journey,
+        profile: flow.profile,
+        required_capabilities: if e2e_metadata.required_capabilities.is_empty() {
+            None
+        } else {
+            Some(e2e_metadata.required_capabilities)
+        },
+        components: normalized.components,
+        diagnostics: normalized.legacy_metadata.diagnostics,
         command_count: commands.len(),
         commands,
     })
@@ -1842,7 +2014,36 @@ fn print_list_result(report: &ListReport, json: bool) -> anyhow::Result<()> {
         }
     }
 
+    if !report.errors.is_empty() {
+        println!(
+            "{} error(s):",
+            report.errors.len().to_string().red()
+        );
+        for error in &report.errors {
+            println!("  {}: {}", error.path.cyan(), error.error);
+        }
+    }
+
     Ok(())
+}
+
+fn multi_target_mock_mode(flow: &lumi_tester::parser::types::NormalizedFlow) -> bool {
+    flow.components
+        .iter()
+        .filter(|(target, _)| **target != lumi_tester::parser::types::TargetId::App)
+        .all(|(_, component)| {
+            let Some(profile) = component.profile.as_deref() else {
+                return false;
+            };
+            let Ok(content) = std::fs::read_to_string(profile) else {
+                return false;
+            };
+            let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
+                return false;
+            };
+            value.get("mock").and_then(serde_yaml::Value::as_bool) == Some(true)
+                || value.get("mode").and_then(serde_yaml::Value::as_str) == Some("mock")
+        })
 }
 
 fn doctor_report(platform: &str) -> DoctorReport {
@@ -2173,7 +2374,12 @@ mod tests {
         let files = collect_test_files(&dir).unwrap();
         let relative = files
             .iter()
-            .map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().to_string())
+            .map(|p| {
+                p.strip_prefix(&dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(relative, vec!["main.yaml", "subflows/login.yaml"]);

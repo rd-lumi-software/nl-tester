@@ -15,6 +15,38 @@ pub use events::*;
 pub use healer::*;
 pub use state::*;
 
+/// Construct the existing platform driver for a canonical App component.
+/// Multi-target orchestration uses this helper opportunistically; if the local
+/// device environment is unavailable the caller can preserve a structured
+/// BLOCKED report instead of replacing the existing App driver.
+pub async fn create_platform_driver_for_target(
+    platform: &str,
+    devices: &[String],
+    speed: Option<&str>,
+) -> Result<Box<dyn crate::driver::traits::PlatformDriver>> {
+    let platform = platform
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_ascii_lowercase();
+    let device = devices.first().map(String::as_str);
+    match platform.as_str() {
+        "android" => Ok(Box::new(
+            crate::driver::android::AndroidDriver::new_with_speed(device, speed).await?,
+        )),
+        "android_auto" => Ok(Box::new(
+            crate::driver::android_auto::AndroidAutoDriver::new(device, true).await?,
+        )),
+        "ios" => Ok(Box::new(crate::driver::ios::IosDriver::new(device).await?)),
+        "web" => Ok(Box::new(
+            crate::driver::web::WebDriver::new(crate::driver::web::WebDriverConfig::default())
+                .await?,
+        )),
+        "macos" => Ok(Box::new(crate::driver::macos::MacosDriver::new())),
+        "windows" => Ok(Box::new(crate::driver::windows::WindowsDriver::new())),
+        _ => anyhow::bail!("Unknown App platform: {platform}"),
+    }
+}
+
 /// Run tests from a file or directory
 pub async fn run_tests(
     path: &Path,

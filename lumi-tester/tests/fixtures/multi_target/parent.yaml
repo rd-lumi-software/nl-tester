@@ -1,0 +1,26 @@
+app:
+  platform: android
+  appId: com.lumi.lumilife
+gateway:
+  platform: lumi_hc
+  profile: profiles/hc.yaml
+cloud:
+  platform: lumi_cloud
+  profile: profiles/cloud.yaml
+---
+- runFlow:
+    path: app.yaml
+    target: app
+    vars:
+      APP_PHASE: initial
+- runFlow:
+    path: gateway.yaml
+    target: gateway
+- runFlow:
+    path: cloud.yaml
+    target: cloud
+- runFlow:
+    path: app.yaml
+    target: app
+    vars:
+      APP_PHASE: final

@@ -1,0 +1,7 @@
+cloud:
+  platform: lumi_cloud
+  profile: profiles/cloud.yaml
+---
+- setVar:
+    name: cloudState
+    value: ready

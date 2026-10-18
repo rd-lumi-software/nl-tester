@@ -1,0 +1,14 @@
+platform: lumi_e2e
+profile: profiles/hc.yaml
+journey: system_journey
+---
+- hcControl:
+    entity: "9007199254740993"
+    state:
+      - idx: 0
+        value: true
+- hcWaitState:
+    entity: "9007199254740993"
+    state:
+      - idx: 0
+        value: true

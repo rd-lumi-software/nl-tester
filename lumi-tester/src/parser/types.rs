@@ -1,12 +1,115 @@
 use serde::{Deserialize, Serialize};
 use serde_json;
 use serde_yaml;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetId {
+    App,
+    Gateway,
+    Cloud,
+}
+
+impl TargetId {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "app" => Some(Self::App),
+            "gateway" => Some(Self::Gateway),
+            "cloud" => Some(Self::Cloud),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::Gateway => "gateway",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+
+impl std::fmt::Display for TargetId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentSource {
+    LegacyApp,
+    LegacyGateway,
+    Canonical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentSpec {
+    pub target: TargetId,
+    pub platform: String,
+    pub app_id: Option<String>,
+    pub profile: Option<PathBuf>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    pub source: ComponentSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostic {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    pub source_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyMetadata {
+    pub journey: Option<String>,
+    pub legacy_platform: Option<String>,
+    pub legacy_profile: Option<PathBuf>,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizedFlow {
+    pub components: BTreeMap<TargetId, ComponentSpec>,
+    pub commands: Vec<TestCommand>,
+    pub legacy_metadata: LegacyMetadata,
+    pub source_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentDeclaration {
+    pub platform: String,
+    #[serde(default)]
+    pub app_id: Option<String>,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
 
 /// Represents a parsed test flow from YAML
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestFlow {
+    #[serde(default)]
+    pub app: Option<ComponentDeclaration>,
+
+    #[serde(default)]
+    pub gateway: Option<ComponentDeclaration>,
+
+    #[serde(default)]
+    pub cloud: Option<ComponentDeclaration>,
+
     #[serde(default)]
     pub app_id: Option<String>,
 
@@ -15,6 +118,14 @@ pub struct TestFlow {
 
     #[serde(default)]
     pub platform: Option<Platform>,
+
+    /// Semantic journey for non-App domains such as lumi_e2e.
+    #[serde(default)]
+    pub journey: Option<String>,
+
+    /// Profile path resolved relative to the flow file for semantic domains.
+    #[serde(default)]
+    pub profile: Option<String>,
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
@@ -527,6 +638,12 @@ pub enum Platform {
     #[serde(alias = "macOS")]
     Macos,
     Windows,
+    #[serde(rename = "lumi_e2e")]
+    LumiE2e,
+    #[serde(rename = "lumi_hc")]
+    LumiHc,
+    #[serde(rename = "lumi_cloud")]
+    LumiCloud,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -760,6 +877,9 @@ pub struct ExtendedWaitParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TestCommand {
+    /// Home Controller semantic E2E command branch.
+    E2e(crate::e2e::types::E2eCommand),
+
     // App lifecycle
     #[serde(alias = "open")]
     LaunchApp(Option<LaunchAppParamsInput>),
@@ -2568,6 +2688,9 @@ fn default_max_retries() -> u32 {
 pub struct RunFlowParams {
     pub path: Option<String>,
 
+    #[serde(default)]
+    pub target: Option<TargetId>,
+
     /// Variables to pass to the nested flow
     #[serde(default, alias = "env")]
     pub vars: Option<HashMap<String, String>>,
@@ -2597,6 +2720,7 @@ impl RunFlowParamsInput {
         match self {
             Self::String(s) => RunFlowParams {
                 path: Some(s),
+                target: None,
                 vars: None,
                 commands: None,
                 when: None,
@@ -2963,6 +3087,7 @@ impl TestCommand {
     /// Get a display name for the command
     pub fn display_name(&self) -> String {
         match self {
+            TestCommand::E2e(command) => command.display_name().to_string(),
             TestCommand::LaunchApp(p_input) => {
                 let p = p_input.clone().map(|pi| pi.into_inner());
                 if let Some(params) = p {

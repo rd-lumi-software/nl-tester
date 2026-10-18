@@ -1,0 +1,5 @@
+platform: android
+appId: com.lumi.lumilife
+journey: user_journey
+---
+- launchApp

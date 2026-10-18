@@ -6,6 +6,7 @@ use super::types::{
     ScrollUntilVisibleParams, SetVarParams, TapAtParams, TapParams, TapParamsInput, TestCommand,
     TestFlow, WaitParams, WaitParamsInput, WhenParams,
 };
+use crate::e2e::types::{deferred_command_message, parse_e2e_command};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -34,9 +35,14 @@ pub fn parse_yaml_content(content: &str, _source_path: &Path) -> Result<TestFlow
             parse_header(header, _source_path)?
         } else {
             TestFlow {
+                app: None,
+                gateway: None,
+                cloud: None,
                 app_id: None,
                 url: None,
                 platform: Some(Platform::default()),
+                journey: None,
+                profile: None,
                 env: None,
                 vars: None,
                 data: None,
@@ -62,9 +68,14 @@ pub fn parse_yaml_content(content: &str, _source_path: &Path) -> Result<TestFlow
     let legacy_commands = match parse_commands(content) {
         Ok(commands) => {
             return Ok(TestFlow {
+                app: None,
+                gateway: None,
+                cloud: None,
                 app_id: None,
                 url: None,
                 platform: Some(Platform::default()),
+                journey: None,
+                profile: None,
                 env: None,
                 vars: None,
                 data: None,
@@ -103,10 +114,16 @@ pub fn parse_yaml_content(content: &str, _source_path: &Path) -> Result<TestFlow
     }
 
     if let serde_yaml::Value::Mapping(map) = value {
+        reject_unknown_components(&map)?;
         let mut flow = TestFlow {
+            app: None,
+            gateway: None,
+            cloud: None,
             app_id: None,
             url: None,
             platform: Some(Platform::default()),
+            journey: None,
+            profile: None,
             env: None,
             vars: None,
             data: None,
@@ -151,6 +168,44 @@ pub fn parse_yaml_content(content: &str, _source_path: &Path) -> Result<TestFlow
             flow.platform = Some(
                 serde_yaml::from_value(val.clone())
                     .context("Failed to parse header field: platform")?,
+            );
+        }
+
+        let explicit_top_level_platform = map
+            .contains_key(&serde_yaml::Value::String("platform".to_string()));
+        flow.app = parse_component_from_map(&map, "app")?;
+        flow.gateway = parse_component_from_map(&map, "gateway")?;
+        flow.cloud = parse_component_from_map(&map, "cloud")?;
+
+        if let Some(app) = flow.app.as_ref() {
+            if flow.app_id.is_none() {
+                flow.app_id = app.app_id.clone();
+            }
+            if !explicit_top_level_platform {
+                // Keep an unsupported canonical component platform as raw component
+                // data so normalization can return the stable UnsupportedPlatform
+                // diagnostic instead of failing while mirroring legacy metadata.
+                if let Ok(platform) =
+                    serde_yaml::from_value(serde_yaml::Value::String(app.platform.clone()))
+                {
+                    flow.platform = Some(platform);
+                }
+            }
+        }
+
+        if let Some(val) = map.get(&serde_yaml::Value::String("journey".to_string())) {
+            flow.journey = Some(
+                val.as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Failed to parse header field: journey"))?
+                    .to_string(),
+            );
+        }
+
+        if let Some(val) = map.get(&serde_yaml::Value::String("profile".to_string())) {
+            flow.profile = Some(
+                val.as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Failed to parse header field: profile"))?
+                    .to_string(),
             );
         }
 
@@ -237,11 +292,21 @@ fn parse_header(header: &str, base_path: &Path) -> Result<TestFlow> {
     #[serde(rename_all = "camelCase")]
     struct Header {
         #[serde(default)]
+        app: Option<crate::parser::types::ComponentDeclaration>,
+        #[serde(default)]
+        gateway: Option<crate::parser::types::ComponentDeclaration>,
+        #[serde(default)]
+        cloud: Option<crate::parser::types::ComponentDeclaration>,
+        #[serde(default)]
         app_id: Option<String>,
         #[serde(default)]
         url: Option<String>,
         #[serde(default)]
         platform: Option<Platform>,
+        #[serde(default)]
+        journey: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
         #[serde(default)]
         env: Option<serde_yaml::Value>,
         #[serde(default, alias = "var")]
@@ -270,7 +335,13 @@ fn parse_header(header: &str, base_path: &Path) -> Result<TestFlow> {
         skip: Option<bool>,
     }
 
-    let parsed: Header = serde_yaml::from_str(header).context("Failed to parse YAML header")?;
+    let header_value: serde_yaml::Value =
+        serde_yaml::from_str(header).context("Failed to parse YAML header")?;
+    if let Some(map) = header_value.as_mapping() {
+        reject_unknown_components(map)?;
+    }
+    let parsed: Header =
+        serde_yaml::from_value(header_value).context("Failed to parse YAML header")?;
 
     // Process env
     let mut env_map = std::collections::HashMap::new();
@@ -318,10 +389,15 @@ fn parse_header(header: &str, base_path: &Path) -> Result<TestFlow> {
         Some(env_map)
     };
 
-    Ok(TestFlow {
+    let mut flow = TestFlow {
+        app: parsed.app,
+        gateway: parsed.gateway,
+        cloud: parsed.cloud,
         app_id: parsed.app_id,
         url: parsed.url,
         platform: parsed.platform,
+        journey: parsed.journey,
+        profile: parsed.profile,
         env,
         vars: parsed.vars,
         data: parsed.data,
@@ -336,7 +412,51 @@ fn parse_header(header: &str, base_path: &Path) -> Result<TestFlow> {
         window_size: parsed.window_size,
         jig: parsed.jig,
         skip: parsed.skip,
-    })
+    };
+    if let Some(app) = flow.app.as_ref() {
+        if flow.app_id.is_none() {
+            flow.app_id = app.app_id.clone();
+        }
+        if flow.platform.is_none() {
+            // Do not make an unsupported canonical component platform a parser
+            // error. The normalized component validator owns that diagnostic.
+            if let Ok(platform) =
+                serde_yaml::from_value(serde_yaml::Value::String(app.platform.clone()))
+            {
+                flow.platform = Some(platform);
+            }
+        }
+    }
+    Ok(flow)
+}
+
+fn reject_unknown_components(map: &serde_yaml::Mapping) -> Result<()> {
+    for (key, value) in map {
+        let (Some(key), Some(component)) = (key.as_str(), value.as_mapping()) else {
+            continue;
+        };
+        let has_platform = component.contains_key(serde_yaml::Value::String("platform".into()));
+        if has_platform && !matches!(key, "app" | "gateway" | "cloud") {
+            return Err(
+                crate::parser::validation::FlowValidationError::UnknownComponent {
+                    component: key.to_string(),
+                }
+                .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn parse_component_from_map(
+    map: &serde_yaml::Mapping,
+    key: &str,
+) -> Result<Option<crate::parser::types::ComponentDeclaration>> {
+    map.get(&serde_yaml::Value::String(key.to_string()))
+        .cloned()
+        .map(serde_yaml::from_value)
+        .transpose()
+        .with_context(|| format!("Failed to parse header field: {key}"))
 }
 
 fn parse_env_file_content(content: &str) -> std::collections::HashMap<String, String> {
@@ -422,8 +542,16 @@ pub fn parse_commands_from_value(value: &serde_yaml::Value) -> Result<Vec<TestCo
 }
 
 fn parse_command_at_index(value: &serde_yaml::Value, index: usize) -> Result<Option<TestCommand>> {
-    parse_command_value(value)
-        .map_err(|error| anyhow::anyhow!("Failed to parse command #{}: {error:#}", index + 1))
+    match parse_command_value(value) {
+        Ok(command) => Ok(command),
+        Err(error) => {
+            let detail = error.to_string();
+            Err(error.context(format!(
+                "Failed to parse command #{}: {detail}",
+                index + 1
+            )))
+        }
+    }
 }
 
 /// Parse a single command from a YAML value
@@ -509,6 +637,14 @@ pub fn parse_command_value(value: &serde_yaml::Value) -> Result<Option<TestComma
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Command name must be a string"))?;
 
+            if let Some(message) = deferred_command_message(cmd_name) {
+                anyhow::bail!("{message}");
+            }
+
+            if let Some(command) = parse_e2e_command(cmd_name, params)? {
+                return Ok(Some(TestCommand::E2e(command)));
+            }
+
             // If params is null or empty map, try simple command first
             if params.is_null() || (params.is_mapping() && params.as_mapping().unwrap().is_empty())
             {
@@ -530,6 +666,13 @@ pub fn parse_command_value(value: &serde_yaml::Value) -> Result<Option<TestComma
 
 /// Parse a simple command without parameters
 fn parse_simple_command(name: &str) -> Result<Option<TestCommand>> {
+    if let Some(message) = deferred_command_message(name) {
+        anyhow::bail!("{message}");
+    }
+    if let Some(command) = parse_e2e_command(name, &serde_yaml::Value::Null)? {
+        return Ok(Some(TestCommand::E2e(command)));
+    }
+
     let cmd = match name {
         "launchApp" | "open" => TestCommand::LaunchApp(None),
         "stopApp" | "stop" => TestCommand::StopApp,
@@ -872,6 +1015,7 @@ fn parse_command_with_params(
                 TestCommand::RunFlow(super::types::RunFlowParamsInput::Struct(
                     super::types::RunFlowParams {
                         path: None,
+                        target: None,
                         vars: None,
                         commands: Some(cmds),
                         when: None,
@@ -897,6 +1041,22 @@ fn parse_command_with_params(
                         .get(&serde_yaml::Value::String("path".to_string()))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
+
+                    let target = map
+                        .get(&serde_yaml::Value::String("target".to_string()))
+                        .map(|value| {
+                            let raw = value.as_str().ok_or_else(|| {
+                                crate::parser::validation::FlowValidationError::UnknownTarget {
+                                    target: value.as_str().unwrap_or("<non-string>").to_string(),
+                                }
+                            })?;
+                            crate::parser::types::TargetId::parse(raw).ok_or_else(|| {
+                                crate::parser::validation::FlowValidationError::UnknownTarget {
+                                    target: raw.to_string(),
+                                }
+                            })
+                        })
+                        .transpose()?;
 
                     let vars = map
                         .get(&serde_yaml::Value::String("vars".to_string()))
@@ -926,6 +1086,7 @@ fn parse_command_with_params(
 
                     TestCommand::RunFlow(RunFlowParamsInput::Struct(RunFlowParams {
                         path,
+                        target,
                         vars,
                         commands,
                         when,
