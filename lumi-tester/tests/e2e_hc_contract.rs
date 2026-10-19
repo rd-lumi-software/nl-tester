@@ -1,22 +1,30 @@
-use lumi_tester::e2e::canonical::{
+use async_trait::async_trait;
+use lumi_tester::hc::backends::v3::runtime::canonical::{
     map_device_entity, map_snapshot, map_state_vector, AliasMapping, DecimalId, EntityRef,
     StateSource,
 };
-use lumi_tester::e2e::evidence::{
+use lumi_tester::hc::backends::v3::runtime::evidence::{
     EvidenceCaptureError, EvidenceCollector, EvidenceConfig, EvidenceKind, EvidenceRecord,
 };
-use lumi_tester::e2e::http::{
+use lumi_tester::hc::backends::v3::runtime::http::{
     default_evidence, HcHttpAdapter, HttpMethod, HttpResponse, MockHttpTransport,
 };
-use lumi_tester::e2e::result::{
-    classify_health, readback_matches, E2eCategory, E2eResult, E2eStatus, EvidenceTier,
+use lumi_tester::hc::backends::v3::runtime::result::{
+    classify_health, readback_matches, V3Category, V3Result, V3Status, EvidenceTier,
     RequestedChange,
 };
-use lumi_tester::e2e::websocket::{
-    HcWsAdapter, HcWsError, MockWebSocketTransport, WsConnection, WsTransport,
-    WsTransportError,
+use lumi_tester::hc::backends::v3::runtime::types::{
+    V3Command, V3EntityParams, V3ExpectParams, V3IndexedValue, V3StateParams,
+    V3SubscribeParams,
 };
-use async_trait::async_trait;
+use lumi_tester::hc::backends::v3::runtime::websocket::{
+    HcWsAdapter, HcWsError, MockWebSocketTransport, WsConnection, WsTransport, WsTransportError,
+};
+use lumi_tester::hc::backends::v3::{translate_v3_result, V3HcProtocolBackend};
+use lumi_tester::hc::{
+    HcBackendConfig, HcBackendRegistry, HcCommand, HcEvidenceTier, HcStateUpdate, HcStatus,
+    V3_IMPLEMENTATION_ID, V3_PACK_VERSION, V3_PROTOCOL_PACK_ID, V3_PROTOCOL_VERSION,
+};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -55,7 +63,9 @@ impl WsConnection for ContinuousIrrelevantConnection {
 
     async fn receive_text(&mut self) -> Result<Option<String>, WsTransportError> {
         tokio::time::sleep(Duration::from_millis(5)).await;
-        Ok(Some(r#"{"type":"event","payload":{"unrelated":true}}"#.into()))
+        Ok(Some(
+            r#"{"type":"event","payload":{"unrelated":true}}"#.into(),
+        ))
     }
 
     async fn close(&mut self) {}
@@ -144,34 +154,177 @@ fn canonical_mapping_preserves_v3_identity_and_explicit_indexes() {
 fn status_classification_distinguishes_passed_failed_blocked_and_error() {
     assert_eq!(
         classify_health(true, EvidenceTier::MockContract).status,
-        E2eStatus::Passed
+        V3Status::Passed
     );
     assert_eq!(
         classify_health(false, EvidenceTier::MockContract).status,
-        E2eStatus::Failed
+        V3Status::Failed
     );
     assert_eq!(
-        E2eResult::blocked(E2eCategory::NoLab, "runtime capability unavailable").status,
-        E2eStatus::Blocked
+        V3Result::blocked(V3Category::NoLab, "runtime capability unavailable").status,
+        V3Status::Blocked
     );
     assert_eq!(
-        E2eResult::error(
-            E2eCategory::ProtocolError,
+        V3Result::error(
+            V3Category::ProtocolError,
             "fixture protocol error",
             EvidenceTier::MockConformance
         )
         .status,
-        E2eStatus::Error
+        V3Status::Error
     );
     assert_eq!(
-        E2eResult::error(
-            E2eCategory::ProtocolError,
+        V3Result::error(
+            V3Category::ProtocolError,
             "fixture protocol error",
             EvidenceTier::MockConformance
         )
         .evidence_tier,
         EvidenceTier::MockConformance
     );
+}
+
+#[test]
+fn v3_backend_maps_all_protocol_neutral_commands_to_legacy_e2e_commands() {
+    let cases = [
+        (HcCommand::Health, V3Command::HcHealth),
+        (HcCommand::GetEntities, V3Command::HcGetEntities),
+        (
+            HcCommand::GetState {
+                entity: "42".into(),
+            },
+            V3Command::HcGetState(V3EntityParams {
+                entity: "42".into(),
+            }),
+        ),
+        (
+            HcCommand::Control {
+                entity: "42".into(),
+                updates: vec![HcStateUpdate::Indexed {
+                    idx: 2,
+                    value: json!(true),
+                }],
+            },
+            V3Command::HcControl(V3StateParams {
+                entity: "42".into(),
+                state: vec![V3IndexedValue {
+                    idx: 2,
+                    value: serde_yaml::to_value(true).unwrap(),
+                }],
+            }),
+        ),
+        (
+            HcCommand::WaitState {
+                entity: "42".into(),
+                expected: vec![HcStateUpdate::Indexed {
+                    idx: 2,
+                    value: json!(true),
+                }],
+            },
+            V3Command::HcWaitState(V3StateParams {
+                entity: "42".into(),
+                state: vec![V3IndexedValue {
+                    idx: 2,
+                    value: serde_yaml::to_value(true).unwrap(),
+                }],
+            }),
+        ),
+        (
+            HcCommand::RealtimeSubscribe {
+                channels: vec!["cell:42".into()],
+            },
+            V3Command::WsSubscribe(V3SubscribeParams {
+                channels: vec!["cell:42".into()],
+            }),
+        ),
+        (
+            HcCommand::RealtimeExpect {
+                entity: "42".into(),
+                event: json!({"state": [{"idx": 2, "value": true}]}),
+            },
+            V3Command::WsExpect(V3ExpectParams {
+                entity: "42".into(),
+                event: serde_yaml::to_value(json!({"state": [{"idx": 2, "value": true}]})).unwrap(),
+            }),
+        ),
+        (
+            HcCommand::RealtimeSnapshot {
+                entity: "42".into(),
+            },
+            V3Command::WsSnapshot(V3EntityParams {
+                entity: "42".into(),
+            }),
+        ),
+    ];
+
+    for (command, expected) in cases {
+        assert_eq!(
+            V3HcProtocolBackend::map_command(&command).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn v3_factory_constructs_the_selected_backend_with_v3_identity() {
+    let config = HcBackendConfig::new(
+        V3_IMPLEMENTATION_ID,
+        V3_PROTOCOL_PACK_ID,
+        V3_PROTOCOL_VERSION,
+        V3_PACK_VERSION,
+        json!({}),
+    );
+
+    let backend = HcBackendRegistry::new().create(&config).unwrap();
+
+    assert_eq!(backend.implementation_id(), V3_IMPLEMENTATION_ID);
+    assert_eq!(backend.protocol_pack(), V3_PROTOCOL_PACK_ID);
+    assert!(backend
+        .capabilities()
+        .iter()
+        .any(|capability| capability.name == "health"));
+}
+
+#[test]
+fn v3_result_translation_preserves_legacy_result_and_evidence_fields() {
+    let evidence = EvidenceRecord {
+        kind: "http_response".into(),
+        payload: "{\"status\":true}".into(),
+        bytes: 15,
+        redacted: false,
+        truncated: false,
+    };
+    let legacy = V3Result::passed(
+        V3Category::ControlDispatch,
+        EvidenceTier::RealE2e,
+        json!({"operation": "control"}),
+        json!({"state": true}),
+        json!({"readbackMatches": true}),
+        vec![evidence.clone()],
+        Some(json!({"state": true})),
+    );
+
+    let translated = translate_v3_result(legacy);
+
+    assert_eq!(translated.status, HcStatus::Passed);
+    assert_eq!(translated.category, "control_dispatch");
+    assert_eq!(
+        translated.message,
+        "operation, bounded readback, assertion, and required evidence completed"
+    );
+    assert_eq!(translated.evidence_tier, HcEvidenceTier::RealE2e);
+    assert_eq!(translated.action, Some(json!({"operation": "control"})));
+    assert_eq!(translated.readback, Some(json!({"state": true})));
+    assert_eq!(translated.assertion, Some(json!({"readbackMatches": true})));
+    assert_eq!(translated.readback_match, Some(true));
+    assert_eq!(translated.normalized, Some(json!({"state": true})));
+    assert_eq!(translated.evidence.len(), 1);
+    assert_eq!(translated.evidence[0].kind, "http_response");
+    assert_eq!(translated.evidence[0].raw["kind"], "http_response");
+    assert_eq!(translated.evidence[0].raw["payload"], evidence.payload);
+    assert_eq!(translated.evidence[0].raw["bytes"], evidence.bytes);
+    assert_eq!(translated.evidence[0].raw["redacted"], evidence.redacted);
+    assert_eq!(translated.evidence[0].raw["truncated"], evidence.truncated);
 }
 
 #[test]
@@ -297,7 +450,7 @@ async fn mock_wire_shapes_match_v3_http_and_websocket_contract() {
     assert!(
         http.control(
             &device_id,
-            &[lumi_tester::e2e::http::ControlChange {
+            &[lumi_tester::hc::backends::v3::runtime::http::ControlChange {
                 idx: 0,
                 value: Value::Bool(true),
             }]
@@ -409,7 +562,7 @@ async fn http_control_requires_bounded_readback_and_normalized_evidence() {
     let response = http
         .control(
             &DecimalId::from_u64(42),
-            &[lumi_tester::e2e::http::ControlChange {
+            &[lumi_tester::hc::backends::v3::runtime::http::ControlChange {
                 idx: 0,
                 value: Value::Bool(true),
             }],
@@ -454,7 +607,7 @@ async fn http_control_status_true_cannot_hide_readback_mismatch() {
     let result = http
         .control(
             &DecimalId::from_u64(42),
-            &[lumi_tester::e2e::http::ControlChange {
+            &[lumi_tester::hc::backends::v3::runtime::http::ControlChange {
                 idx: 0,
                 value: Value::Bool(true),
             }],
@@ -558,8 +711,8 @@ async fn websocket_expect_state_propagates_required_evidence_errors() {
 
 #[test]
 fn passed_result_requires_explicit_normalized_evidence() {
-    let result = E2eResult::passed(
-        E2eCategory::ControlDispatch,
+    let result = V3Result::passed(
+        V3Category::ControlDispatch,
         EvidenceTier::MockContract,
         json!({"operation":"control"}),
         json!({"state":true}),
@@ -573,14 +726,14 @@ fn passed_result_requires_explicit_normalized_evidence() {
         }],
         None,
     );
-    assert_eq!(result.status, E2eStatus::Error);
-    assert_eq!(result.category, E2eCategory::EvidenceError);
+    assert_eq!(result.status, V3Status::Error);
+    assert_eq!(result.category, V3Category::EvidenceError);
 }
 
 #[test]
 fn passed_result_rejects_null_normalized_evidence() {
-    let result = E2eResult::passed(
-        E2eCategory::ControlDispatch,
+    let result = V3Result::passed(
+        V3Category::ControlDispatch,
         EvidenceTier::MockContract,
         json!({"operation":"control"}),
         json!({"state":true}),
@@ -594,6 +747,6 @@ fn passed_result_rejects_null_normalized_evidence() {
         }],
         Some(Value::Null),
     );
-    assert_eq!(result.status, E2eStatus::Error);
-    assert_eq!(result.category, E2eCategory::EvidenceError);
+    assert_eq!(result.status, V3Status::Error);
+    assert_eq!(result.category, V3Category::EvidenceError);
 }

@@ -12,7 +12,7 @@ không dùng giá trị minh họa để biến gap thành contract.
 
 ## 1. Quyết định và ranh giới
 
-Vertical slice này chạy platform: lumi_e2e với journey: system_journey, tập
+Vertical slice này chạy platform: lumi_hc với journey: system_journey, tập
 trung vào một Cell device duy nhất:
 
 - health/readiness;
@@ -43,7 +43,7 @@ một nhánh domain riêng bên trong command model và một E2E session riêng
 | Fact | Nguồn | Tác động thiết kế |
 | --- | --- | --- |
 | TestFlow có platform, defaultTimeout, tags, commands; chưa có journey hoặc profile. | lumi-tester/src/parser/types.rs:9-35, parser/yaml.rs:234-339 | Bổ sung field header theo kiểu additive; không đổi hành vi header App cũ. |
-| Platform hiện chỉ có Android/Android Auto/iOS/Web/macOS/Windows. | lumi-tester/src/parser/types.rs:516-530 | Thêm platform semantic lumi_e2e, nhưng không đưa nó vào App PlatformDriver. |
+| Platform hiện chỉ có Android/Android Auto/iOS/Web/macOS/Windows. | lumi-tester/src/parser/types.rs:516-530 | Thêm platform semantic lumi_hc, nhưng không đưa nó vào App PlatformDriver. |
 | Command được parse từ list YAML qua parse_command_value và parse_command_with_params; list lấy display_name() và index theo thứ tự. | parser/yaml.rs:381-523, src/main.rs:1778-1787 | E2E command phải có display name ổn định và giữ index 0-based. |
 | TestCommand là enum rất lớn và TestExecutor match toàn bộ command, nhận một Box<dyn PlatformDriver>. | parser/types.rs:759-1046, runner/executor.rs:19-56, 1520-... | Không đưa HC state vào App driver; cần E2E dispatch/session branch ở boundary runner. |
 | TestContext đã giữ base path, output, env/vars và default timeout; path tương đối được resolve theo flow. | runner/context.rs:7-105 | Profile path và evidence root resolve theo flow/profile, không theo checkout path cố định. |
@@ -51,7 +51,7 @@ một nhánh domain riêng bên trong command model và một E2E session riêng
 | Event JSONL serialize TestEvent và hiện có session/flow/command passed/failed/retry/skip. | runner/events.rs:6-140 | Thêm event metadata E2E theo additive schema; giữ tên và shape cũ cho App flow. |
 | Report chuẩn hiện suy ra pass/fail từ số failed, JUnit coi mọi failure là assertion failure. | report/types.rs:4-90, report/json.rs:24-145, report/junit.rs:9-115 | E2E status phải nằm trong extension structured, không để blocked bị coi là product pass/fail. |
 | run_tests luôn chọn App driver theo platform trước khi executor chạy. | runner/mod.rs:19-... | Entry point phải nhận diện E2E trước bước khởi tạo App driver. |
-| Product đã có reqwest, tokio-tungstenite, futures-util, serde, serde_json, Tokio; hiện chưa có src/e2e. | lumi-tester/Cargo.toml, directory lumi-tester/src | Đây là boundary mới; không cần suy ra dependency hoặc API từ project HC khác. |
+| Product đã có reqwest, tokio-tungstenite, futures-util, serde, serde_json, Tokio; runtime HC nằm dưới src/hc/backends/v3/runtime. | lumi-tester/Cargo.toml, directory lumi-tester/src | Đây là boundary mới; không cần suy ra dependency hoặc API từ project HC khác. |
 
 ### 2.2 v3 HTTP — đã xác nhận hoặc gap
 
@@ -123,7 +123,7 @@ pack phải khai báo mapping cụ thể; nếu không có mapping thì semantic
 
 Header bắt buộc của một system flow:
 
-    platform: lumi_e2e
+    platform: lumi_hc
     journey: system_journey
     profile: profiles/lumi-iot-v3-home-controller.yaml
     defaultTimeout: 15000
@@ -505,9 +505,9 @@ phải có type/ownership riêng.
 
 ### Command model đã chọn
 
-Chọn TestCommand::E2e(E2eCommand) (tên enum cụ thể tùy implementation) để
+Chọn TestCommand::V3(V3Command) (tên enum cụ thể tùy implementation) để
 parser/list/index vẫn có một command stream, trong khi payload và dispatch của
-E2E nằm trong domain module riêng. Đây là nhánh riêng về ownership, không phải
+HC nằm trong domain module riêng. Đây là nhánh riêng về ownership, không phải
 một tập route mới nhúng trong TestCommand chung.
 
 Đã loại bỏ các phương án:

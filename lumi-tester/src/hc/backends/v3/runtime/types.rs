@@ -4,7 +4,7 @@ use serde_yaml::{Mapping, Value};
 /// Capabilities that the Phase 1 Home Controller boundary can require.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum E2eCapability {
+pub enum V3Capability {
     Health,
     DeviceDiscovery,
     DeviceState,
@@ -12,7 +12,7 @@ pub enum E2eCapability {
     RealtimeCellReadback,
 }
 
-impl E2eCapability {
+impl V3Capability {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "health" => Some(Self::Health),
@@ -37,33 +37,33 @@ impl E2eCapability {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eEntityParams {
+pub struct V3EntityParams {
     pub entity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eIndexedValue {
+pub struct V3IndexedValue {
     pub idx: u64,
     pub value: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eStateParams {
+pub struct V3StateParams {
     pub entity: String,
-    pub state: Vec<E2eIndexedValue>,
+    pub state: Vec<V3IndexedValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eSubscribeParams {
+pub struct V3SubscribeParams {
     pub channels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eExpectParams {
+pub struct V3ExpectParams {
     pub entity: String,
     pub event: Value,
 }
@@ -71,18 +71,18 @@ pub struct E2eExpectParams {
 /// Semantic operations stay separate from App driver commands.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub enum E2eCommand {
+pub enum V3Command {
     HcHealth,
     HcGetEntities,
-    HcGetState(E2eEntityParams),
-    HcControl(E2eStateParams),
-    HcWaitState(E2eStateParams),
-    WsSubscribe(E2eSubscribeParams),
-    WsExpect(E2eExpectParams),
-    WsSnapshot(E2eEntityParams),
+    HcGetState(V3EntityParams),
+    HcControl(V3StateParams),
+    HcWaitState(V3StateParams),
+    WsSubscribe(V3SubscribeParams),
+    WsExpect(V3ExpectParams),
+    WsSnapshot(V3EntityParams),
 }
 
-impl E2eCommand {
+impl V3Command {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::HcHealth => "hcHealth",
@@ -96,24 +96,24 @@ impl E2eCommand {
         }
     }
 
-    pub fn required_capabilities(&self) -> Vec<E2eCapability> {
+    pub fn required_capabilities(&self) -> Vec<V3Capability> {
         match self {
-            Self::HcHealth => vec![E2eCapability::Health],
-            Self::HcGetEntities => vec![E2eCapability::DeviceDiscovery],
+            Self::HcHealth => vec![V3Capability::Health],
+            Self::HcGetEntities => vec![V3Capability::DeviceDiscovery],
             Self::HcGetState(_) | Self::HcWaitState(_) => {
-                vec![E2eCapability::DeviceState]
+                vec![V3Capability::DeviceState]
             }
             // This is the advertised capability union for the command. The
             // two readback entries are alternatives, not an all-of gate;
             // validate_flow enforces the explicit device_state OR
             // realtime_cell_readback rule for HcControl.
             Self::HcControl(_) => vec![
-                E2eCapability::DeviceControl,
-                E2eCapability::DeviceState,
-                E2eCapability::RealtimeCellReadback,
+                V3Capability::DeviceControl,
+                V3Capability::DeviceState,
+                V3Capability::RealtimeCellReadback,
             ],
             Self::WsSubscribe(_) | Self::WsExpect(_) | Self::WsSnapshot(_) => {
-                vec![E2eCapability::RealtimeCellReadback]
+                vec![V3Capability::RealtimeCellReadback]
             }
         }
     }
@@ -121,16 +121,16 @@ impl E2eCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eCommandRequirement {
+pub struct V3CommandRequirement {
     pub index: usize,
     pub name: String,
     /// Advertised capability union. HcControl's readback entries are an
     /// any-of alternative enforced by profile preflight, not a conjunction.
-    pub capabilities: Vec<E2eCapability>,
+    pub capabilities: Vec<V3Capability>,
 }
 
-impl E2eCommandRequirement {
-    pub fn for_command(index: usize, command: &E2eCommand) -> Self {
+impl V3CommandRequirement {
+    pub fn for_command(index: usize, command: &V3Command) -> Self {
         Self {
             index,
             name: command.display_name().to_string(),
@@ -160,58 +160,58 @@ pub fn deferred_command_message(name: &str) -> Option<String> {
 
     deferred.then(|| {
         format!(
-            "E2E command '{name}' is deferred outside the single-device system_journey scope"
+            "V3 HC command '{name}' is deferred outside the single-device system_journey scope"
         )
     })
 }
 
-pub fn parse_e2e_command(name: &str, params: &Value) -> anyhow::Result<Option<E2eCommand>> {
+pub fn parse_v3_command(name: &str, params: &Value) -> anyhow::Result<Option<V3Command>> {
     let command = match name {
         "hcHealth" => {
             ensure_no_params(name, params)?;
-            Some(E2eCommand::HcHealth)
+            Some(V3Command::HcHealth)
         }
         "hcGetEntities" => {
             ensure_no_params(name, params)?;
-            Some(E2eCommand::HcGetEntities)
+            Some(V3Command::HcGetEntities)
         }
-        "hcGetState" => Some(E2eCommand::HcGetState(parse_entity_params(name, params)?)),
-        "hcControl" => Some(E2eCommand::HcControl(parse_state_params(name, params)?)),
-        "hcWaitState" => Some(E2eCommand::HcWaitState(parse_state_params(name, params)?)),
-        "wsSubscribe" => Some(E2eCommand::WsSubscribe(parse_subscribe_params(name, params)?)),
-        "wsExpect" => Some(E2eCommand::WsExpect(parse_expect_params(name, params)?)),
-        "wsSnapshot" => Some(E2eCommand::WsSnapshot(parse_entity_params(name, params)?)),
+        "hcGetState" => Some(V3Command::HcGetState(parse_entity_params(name, params)?)),
+        "hcControl" => Some(V3Command::HcControl(parse_state_params(name, params)?)),
+        "hcWaitState" => Some(V3Command::HcWaitState(parse_state_params(name, params)?)),
+        "wsSubscribe" => Some(V3Command::WsSubscribe(parse_subscribe_params(name, params)?)),
+        "wsExpect" => Some(V3Command::WsExpect(parse_expect_params(name, params)?)),
+        "wsSnapshot" => Some(V3Command::WsSnapshot(parse_entity_params(name, params)?)),
         _ => None,
     };
 
     Ok(command)
 }
 
-fn parse_entity_params(name: &str, params: &Value) -> anyhow::Result<E2eEntityParams> {
+fn parse_entity_params(name: &str, params: &Value) -> anyhow::Result<V3EntityParams> {
     let map = params_mapping(name, params)?;
-    Ok(E2eEntityParams {
+    Ok(V3EntityParams {
         entity: required_string(map, "entity", name)?,
     })
 }
 
-fn parse_state_params(name: &str, params: &Value) -> anyhow::Result<E2eStateParams> {
+fn parse_state_params(name: &str, params: &Value) -> anyhow::Result<V3StateParams> {
     let map = params_mapping(name, params)?;
     if map.contains_key(Value::String("capability".to_string())) {
         anyhow::bail!(
-            "E2E command '{name}' uses deferred capability alias; use explicit state with idx and value"
+            "V3 HC command '{name}' uses deferred capability alias; use explicit state with idx and value"
         );
     }
 
     let entity = required_string(map, "entity", name)?;
     let state = map
         .get(Value::String("state".to_string()))
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' requires 'state'"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' requires 'state'"))?;
     let values = state
         .as_sequence()
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' field 'state' must be a list"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' field 'state' must be a list"))?;
 
     if values.is_empty() {
-        anyhow::bail!("E2E command '{name}' field 'state' must not be empty");
+        anyhow::bail!("V3 HC command '{name}' field 'state' must not be empty");
     }
 
     let state = values
@@ -220,76 +220,76 @@ fn parse_state_params(name: &str, params: &Value) -> anyhow::Result<E2eStatePara
         .map(|(position, value)| parse_indexed_value(name, position, value))
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    Ok(E2eStateParams { entity, state })
+    Ok(V3StateParams { entity, state })
 }
 
-fn parse_subscribe_params(name: &str, params: &Value) -> anyhow::Result<E2eSubscribeParams> {
+fn parse_subscribe_params(name: &str, params: &Value) -> anyhow::Result<V3SubscribeParams> {
     let map = params_mapping(name, params)?;
     let channels = map
         .get(Value::String("channels".to_string()))
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' requires 'channels'"))?
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' requires 'channels'"))?
         .as_sequence()
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' field 'channels' must be a list"))?
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' field 'channels' must be a list"))?
         .iter()
         .enumerate()
         .map(|(index, value)| {
             value.as_str().map(str::to_owned).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "E2E command '{name}' channel at index {index} must be a string"
+                    "V3 HC command '{name}' channel at index {index} must be a string"
                 )
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     if channels.is_empty() {
-        anyhow::bail!("E2E command '{name}' requires at least one channel");
+        anyhow::bail!("V3 HC command '{name}' requires at least one channel");
     }
 
-    Ok(E2eSubscribeParams { channels })
+    Ok(V3SubscribeParams { channels })
 }
 
-fn parse_expect_params(name: &str, params: &Value) -> anyhow::Result<E2eExpectParams> {
+fn parse_expect_params(name: &str, params: &Value) -> anyhow::Result<V3ExpectParams> {
     let map = params_mapping(name, params)?;
     let entity = required_string(map, "entity", name)?;
     let event = map
         .get(Value::String("event".to_string()))
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' requires 'event'"))?
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' requires 'event'"))?
         .clone();
     if !event.is_mapping() {
-        anyhow::bail!("E2E command '{name}' field 'event' must be a mapping");
+        anyhow::bail!("V3 HC command '{name}' field 'event' must be a mapping");
     }
 
     if let Some(state) = event.get(Value::String("state".to_string())) {
         let values = state.as_sequence().ok_or_else(|| {
-            anyhow::anyhow!("E2E command '{name}' event field 'state' must be a list")
+            anyhow::anyhow!("V3 HC command '{name}' event field 'state' must be a list")
         })?;
         for (position, value) in values.iter().enumerate() {
             parse_indexed_value(name, position, value)?;
         }
     }
 
-    Ok(E2eExpectParams { entity, event })
+    Ok(V3ExpectParams { entity, event })
 }
 
 fn params_mapping<'a>(name: &str, params: &'a Value) -> anyhow::Result<&'a Mapping> {
     params
         .as_mapping()
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' requires a mapping"))
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' requires a mapping"))
 }
 
 fn required_string(map: &Mapping, field: &str, name: &str) -> anyhow::Result<String> {
     let value = map
         .get(Value::String(field.to_string()))
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' requires '{field}'"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' requires '{field}'"))?;
     let value = value
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' field '{field}' must be a string"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' field '{field}' must be a string"))?;
     if value.trim().is_empty() {
-        anyhow::bail!("E2E command '{name}' field '{field}' must not be empty");
+        anyhow::bail!("V3 HC command '{name}' field '{field}' must not be empty");
     }
     if field == "entity" && value.parse::<u64>().is_err() {
         anyhow::bail!(
-            "E2E command '{name}' field '{field}' must be a decimal u64 string"
+            "V3 HC command '{name}' field '{field}' must be a decimal u64 string"
         );
     }
     Ok(value.to_string())
@@ -299,32 +299,32 @@ fn ensure_no_params(name: &str, params: &Value) -> anyhow::Result<()> {
     if params.is_null() || params.as_mapping().is_some_and(Mapping::is_empty) {
         return Ok(());
     }
-    anyhow::bail!("E2E command '{name}' must not accept parameters")
+    anyhow::bail!("V3 HC command '{name}' must not accept parameters")
 }
 
 fn parse_indexed_value(
     name: &str,
     position: usize,
     value: &Value,
-) -> anyhow::Result<E2eIndexedValue> {
+) -> anyhow::Result<V3IndexedValue> {
     let map = value.as_mapping().ok_or_else(|| {
         anyhow::anyhow!(
-            "E2E command '{name}' state item at position {position} must be a mapping"
+            "V3 HC command '{name}' state item at position {position} must be a mapping"
         )
     })?;
     let idx_value = map
         .get(Value::String("idx".to_string()))
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' state item requires 'idx'"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' state item requires 'idx'"))?;
     let idx_number = idx_value.as_u64().ok_or_else(|| {
         anyhow::anyhow!(
-            "E2E command '{name}' state item 'idx' must be an explicit non-negative integer"
+            "V3 HC command '{name}' state item 'idx' must be an explicit non-negative integer"
         )
     })?;
     let state_value = map
         .get(Value::String("value".to_string()))
-        .ok_or_else(|| anyhow::anyhow!("E2E command '{name}' state item requires 'value'"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC command '{name}' state item requires 'value'"))?;
 
-    Ok(E2eIndexedValue {
+    Ok(V3IndexedValue {
         idx: idx_number,
         value: state_value.clone(),
     })

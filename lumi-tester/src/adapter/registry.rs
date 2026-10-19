@@ -1,8 +1,11 @@
 use super::{AdapterResult, AdapterStatus, CloudMockAdapter, TargetAdapter, TargetScope};
-use crate::e2e;
+use crate::driver::traits::PlatformDriver;
+use crate::hc::{
+    HcBackendDescriptor, HcBackendRegistry, HcBackendResult, HcCommand, HcEvidence,
+    HcExecutionScope, HcProtocolBackend, HcStateUpdate, HcStatus,
+};
 use crate::parser::types::{ComponentSpec, TargetId, TestCommand};
 use crate::runner::context::TestContext;
-use crate::driver::traits::PlatformDriver;
 use crate::runner::executor::TestExecutor;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -19,12 +22,18 @@ impl AdapterRegistryError {
     }
 }
 
-#[derive(Default)]
-pub struct AdapterRegistry;
+pub struct AdapterRegistry {
+    hc_backends: HcBackendRegistry,
+}
 
 impl AdapterRegistry {
+    /// Construct an adapter registry with an explicitly supplied HC factory.
+    pub fn with_hc_backend_registry(hc_backends: HcBackendRegistry) -> Self {
+        Self { hc_backends }
+    }
+
     pub fn standard() -> Self {
-        Self
+        Self::with_hc_backend_registry(HcBackendRegistry::new())
     }
 
     pub fn create(
@@ -45,12 +54,11 @@ impl AdapterRegistry {
             (TargetId::App, "android" | "android_auto" | "ios" | "web" | "macos" | "windows") => {
                 Box::new(AppDriverAdapter::new(component.platform.clone()))
             }
-            (TargetId::Gateway, "lumi_hc") => {
-                Box::new(HcGatewayAdapter::new(
-                    component.profile.clone(),
-                    source_path.map(Path::to_path_buf),
-                ))
-            }
+            (TargetId::Gateway, "lumi_hc") => Box::new(HcGatewayAdapter::new(
+                component.profile.clone(),
+                source_path.map(Path::to_path_buf),
+                self.hc_backends.clone(),
+            )),
             (TargetId::Cloud, "lumi_cloud") if cloud_profile_is_real(component) => {
                 Box::new(UnavailableCloudAdapter::new())
             }
@@ -73,14 +81,7 @@ impl AdapterRegistry {
         output: &Path,
     ) -> Result<Box<dyn TargetAdapter>, AdapterRegistryError> {
         self.create_app_with_driver_with_options(
-            component,
-            driver,
-            base_dir,
-            output,
-            false,
-            false,
-            false,
-            false,
+            component, driver, base_dir, output, false, false, false, false,
         )
     }
 
@@ -288,11 +289,9 @@ impl TargetAdapter for AppDriverAdapter {
                 }));
                 result
             }
-            Err(error) => AdapterResult::failed(
-                "app_platform_driver",
-                "AppCommandFailed",
-                error.to_string(),
-            ),
+            Err(error) => {
+                AdapterResult::failed("app_platform_driver", "AppCommandFailed", error.to_string())
+            }
         }
     }
     fn close(&mut self, _context: &TestContext) -> AdapterResult {
@@ -319,131 +318,91 @@ struct HcGatewayAdapter {
     capabilities: Vec<String>,
     profile: Option<PathBuf>,
     source_path: Option<PathBuf>,
-    runtime: Option<e2e::E2eRuntime>,
+    backend_registry: HcBackendRegistry,
+    backend: Option<Box<dyn HcProtocolBackend>>,
+    backend_identity: Option<HcBackendDescriptor>,
     context: Option<TestContext>,
 }
 
 impl HcGatewayAdapter {
-    fn new(profile: Option<PathBuf>, source_path: Option<PathBuf>) -> Self {
+    fn new(
+        profile: Option<PathBuf>,
+        source_path: Option<PathBuf>,
+        backend_registry: HcBackendRegistry,
+    ) -> Self {
         Self {
             capabilities: vec!["existing_hc_http_websocket".into()],
             profile,
             source_path,
-            runtime: None,
+            backend_registry,
+            backend: None,
+            backend_identity: None,
             context: None,
         }
     }
 
-    fn preflight_message(&self) -> String {
+    fn select_backend(&mut self) -> Result<(), AdapterResult> {
         let Some(profile_path) = self.profile.as_deref() else {
-            return "real HC endpoint environment is unresolved: no profile was declared".into();
-        };
-        let Ok(content) = std::fs::read_to_string(profile_path) else {
-            return format!(
-                "real HC endpoint environment is unresolved for profile '{}'",
-                profile_path.display()
-            );
-        };
-        let Ok(profile) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
-            return format!(
-                "real HC endpoint environment is unresolved for malformed profile '{}'",
-                profile_path.display()
-            );
-        };
-        let endpoint = profile.get("endpoint");
-        let base_url = endpoint
-            .and_then(|value| value.get("baseUrl"))
-            .and_then(serde_yaml::Value::as_str);
-        let websocket_url = endpoint
-            .and_then(|value| value.get("websocketUrl"))
-            .and_then(serde_yaml::Value::as_str);
-        if endpoint_value_is_unresolved(base_url) || endpoint_value_is_unresolved(websocket_url) {
-            return format!(
-                "real HC endpoint environment is unresolved for profile '{}'",
-                profile_path.display()
-            );
-        }
-        format!(
-            "real HC endpoint environment from profile '{}' is unavailable in this session",
-            profile_path.display()
-        )
-    }
-
-    fn prepare_runtime(&mut self, context: &TestContext) -> AdapterResult {
-        let Some(profile_path) = self.profile.as_deref() else {
-            return AdapterResult::blocked(
+            return Err(AdapterResult::blocked(
                 self.adapter_name(),
                 "NoLab",
-                self.preflight_message(),
-            );
+                "HC profile is required",
+            ));
         };
         let Some(source_path) = self.source_path.as_deref() else {
-            return AdapterResult::blocked(
+            return Err(AdapterResult::blocked(
                 self.adapter_name(),
                 "NoLab",
                 "real HC endpoint environment is unresolved: flow source path is unavailable",
-            );
+            ));
         };
         let source_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
         let Ok(profile_ref) = profile_path.strip_prefix(source_dir) else {
-            return AdapterResult::blocked(
+            return Err(AdapterResult::blocked(
                 self.adapter_name(),
                 "NoLab",
-                format!("HC profile '{}' is outside the flow directory", profile_path.display()),
-            );
+                format!(
+                    "HC profile '{}' is outside the flow directory",
+                    profile_path.display()
+                ),
+            ));
         };
         let profile_ref = profile_ref.to_string_lossy().replace('\\', "/");
-        let loaded = match e2e::profile::load_profile(source_path, &profile_ref) {
-            Ok(loaded) => loaded,
+        let config = match crate::hc::profile::load_profile(source_path, &profile_ref) {
+            Ok(config) => config,
             Err(error) => {
-                return AdapterResult::blocked(
+                return Err(AdapterResult::blocked(
                     self.adapter_name(),
                     "NoLab",
-                    format!("{} ({error})", self.preflight_message()),
-                )
+                    error.to_string(),
+                ))
             }
         };
-        let base_url = context.substitute_vars(&loaded.profile.endpoint.base_url);
-        let websocket_url = context.substitute_vars(&loaded.profile.endpoint.websocket_url);
-        if base_url.contains("${") || websocket_url.contains("${") {
-            return AdapterResult::blocked(
-                self.adapter_name(),
-                "NoLab",
-                "real HC endpoint environment is unresolved; real HC lab execution is blocked",
-            );
+        if self.backend.is_none() {
+            let descriptor = match self.backend_registry.resolve(&config) {
+                Ok(descriptor) => descriptor,
+                Err(error) => {
+                    return Err(AdapterResult::blocked(
+                        self.adapter_name(),
+                        "NoLab",
+                        format!("real HC backend preflight is unavailable: {error}"),
+                    ))
+                }
+            };
+            self.backend = match self.backend_registry.create(&config) {
+                Ok(backend) => Some(backend),
+                Err(error) => {
+                    return Err(AdapterResult::blocked(
+                        self.adapter_name(),
+                        "NoLab",
+                        format!("real HC backend preflight is unavailable: {error}"),
+                    ))
+                }
+            };
+            self.backend_identity = Some(descriptor);
         }
-        match e2e::E2eRuntime::new(
-            &loaded,
-            base_url,
-            websocket_url,
-            std::time::Duration::from_millis(context.default_timeout_ms),
-        ) {
-            Ok(runtime) => {
-                self.runtime = Some(runtime);
-                let mut result = AdapterResult::passed(self.adapter_name());
-                result.evidence_tier = Some("real_preflight".into());
-                result
-            }
-            Err(error) => AdapterResult::blocked(
-                self.adapter_name(),
-                "NoLab",
-                format!("real HC runtime preflight is unavailable: {error}"),
-            ),
-        }
+        Ok(())
     }
-}
-
-fn endpoint_value_is_unresolved(value: Option<&str>) -> bool {
-    let Some(value) = value else {
-        return true;
-    };
-    let Some(variable) = value
-        .strip_prefix("${")
-        .and_then(|value| value.strip_suffix('}'))
-    else {
-        return false;
-    };
-    std::env::var(variable).map_or(true, |value| value.trim().is_empty())
 }
 
 impl TargetAdapter for HcGatewayAdapter {
@@ -459,80 +418,182 @@ impl TargetAdapter for HcGatewayAdapter {
     fn capabilities(&self) -> &[String] {
         &self.capabilities
     }
-    fn preflight(&mut self, _context: &TestContext) -> AdapterResult {
-        if self.runtime.is_some() {
-            let mut result = AdapterResult::passed(self.adapter_name());
-            result.evidence_tier = Some("real_preflight".into());
-            result
-        } else {
-            self.prepare_runtime(_context)
+    fn preflight(&mut self, context: &TestContext) -> AdapterResult {
+        if let Err(result) = self.select_backend() {
+            return result;
         }
+        let result = self
+            .backend
+            .as_mut()
+            .expect("HC backend is selected before lifecycle preflight")
+            .preflight(context);
+        adapter_result_from_hc(self.adapter_name(), result, self.backend_identity.as_ref())
     }
     fn open(&mut self, context: &TestContext) -> AdapterResult {
-        self.preflight(context)
+        if let Err(result) = self.select_backend() {
+            return result;
+        }
+        let result = self
+            .backend
+            .as_mut()
+            .expect("HC backend is selected before lifecycle open")
+            .open(context);
+        adapter_result_from_hc(self.adapter_name(), result, self.backend_identity.as_ref())
     }
     fn update_context(&mut self, context: &TestContext) {
         self.context = Some(context.clone());
     }
-    fn execute(&mut self, command: &TestCommand, _scope: &TargetScope) -> AdapterResult {
-        let Some(runtime) = self.runtime.as_mut() else {
+    fn execute(&mut self, command: &TestCommand, scope: &TargetScope) -> AdapterResult {
+        let adapter_name = self.adapter_name().to_string();
+        let Some(backend) = self.backend.as_mut() else {
             return AdapterResult::blocked(
-                self.adapter_name(),
+                &adapter_name,
                 "NoLab",
                 "real HC execution is unavailable in this session",
             );
         };
-        let TestCommand::E2e(command) = command else {
+        let TestCommand::V3(command) = command else {
             return AdapterResult::failed(
-                self.adapter_name(),
+                &adapter_name,
                 "UnsupportedCapability",
-                "HC adapter accepts E2E gateway commands only",
+                "HC adapter accepts V3 gateway commands only",
             );
         };
-        let command = match substitute_e2e_command(command, self.context.as_ref()) {
+        let command = hc_command_from_v3(command);
+        let command = match substitute_hc_command(&command, self.context.as_ref()) {
             Ok(command) => command,
             Err(error) => {
-                return AdapterResult::error(self.adapter_name(), error);
+                return AdapterResult::error(&adapter_name, error);
             }
         };
-        let result = block_on_adapter(runtime.execute(&command));
-        let status = match result.status {
-            e2e::result::E2eStatus::Passed => AdapterStatus::Passed,
-            e2e::result::E2eStatus::Failed => AdapterStatus::Failed,
-            e2e::result::E2eStatus::Blocked => AdapterStatus::Blocked,
-            e2e::result::E2eStatus::Error => AdapterStatus::Error,
-        };
-        let evidence_tier = serde_json::to_value(result.evidence_tier)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string));
-        let category = serde_json::to_value(result.category)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string))
-            .unwrap_or_else(|| "e2e".into());
-        AdapterResult {
-            status,
-            adapter: self.adapter_name().into(),
-            category,
-            message: result.message,
-            evidence_tier,
-            raw_evidence: Some(serde_json::json!({
-                "action": result.action,
-                "readback": result.readback,
-                "assertion": result.assertion,
-                "evidence": result.evidence,
-            })),
-            normalized_evidence: result.normalized,
-        }
+        let scope = HcExecutionScope::new(
+            scope.depth,
+            scope.command_index,
+            scope.correlation_id.clone(),
+        );
+        let result = backend.execute(&command, &scope);
+        adapter_result_from_hc(&adapter_name, result, self.backend_identity.as_ref())
     }
-    fn close(&mut self, _context: &TestContext) -> AdapterResult {
-        AdapterResult::passed(self.adapter_name())
+    fn close(&mut self, context: &TestContext) -> AdapterResult {
+        let result = match self.backend.as_mut() {
+            Some(backend) => backend.close(context),
+            None => HcBackendResult::passed("HC backend was not opened"),
+        };
+        adapter_result_from_hc(self.adapter_name(), result, self.backend_identity.as_ref())
     }
 }
 
-fn substitute_e2e_command(
-    command: &crate::e2e::types::E2eCommand,
+impl Default for AdapterRegistry {
+    fn default() -> Self {
+        Self::standard()
+    }
+}
+
+fn hc_command_from_v3(
+    command: &crate::hc::backends::v3::runtime::types::V3Command,
+) -> HcCommand {
+    use crate::hc::backends::v3::runtime::types::V3Command;
+
+    match command {
+        V3Command::HcHealth => HcCommand::Health,
+        V3Command::HcGetEntities => HcCommand::GetEntities,
+        V3Command::HcGetState(params) => HcCommand::GetState {
+            entity: params.entity.clone(),
+        },
+        V3Command::HcControl(params) => HcCommand::Control {
+            entity: params.entity.clone(),
+            updates: hc_state_updates(&params.state),
+        },
+        V3Command::HcWaitState(params) => HcCommand::WaitState {
+            entity: params.entity.clone(),
+            expected: hc_state_updates(&params.state),
+        },
+        V3Command::WsSubscribe(params) => HcCommand::RealtimeSubscribe {
+            channels: params.channels.clone(),
+        },
+        V3Command::WsExpect(params) => HcCommand::RealtimeExpect {
+            entity: params.entity.clone(),
+            event: serde_json::to_value(&params.event).unwrap_or(serde_json::Value::Null),
+        },
+        V3Command::WsSnapshot(params) => HcCommand::RealtimeSnapshot {
+            entity: params.entity.clone(),
+        },
+    }
+}
+
+fn hc_state_updates(
+    values: &[crate::hc::backends::v3::runtime::types::V3IndexedValue],
+) -> Vec<HcStateUpdate> {
+    values
+        .iter()
+        .map(|value| HcStateUpdate::Indexed {
+            idx: value.idx,
+            value: serde_json::to_value(&value.value).unwrap_or(serde_json::Value::Null),
+        })
+        .collect()
+}
+
+fn adapter_result_from_hc(
+    adapter: &str,
+    result: HcBackendResult,
+    backend_identity: Option<&HcBackendDescriptor>,
+) -> AdapterResult {
+    let status = match result.status {
+        HcStatus::Passed => AdapterStatus::Passed,
+        HcStatus::Failed => AdapterStatus::Failed,
+        HcStatus::Blocked => AdapterStatus::Blocked,
+        HcStatus::Error => AdapterStatus::Error,
+    };
+    let evidence_tier = serde_json::to_value(result.evidence_tier)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string));
+    let mut raw_evidence = serde_json::json!({
+        "action": result.action,
+        "readback": result.readback,
+        "assertion": result.assertion,
+        "evidence": result
+            .evidence
+            .into_iter()
+            .map(hc_evidence_payload)
+            .collect::<Vec<_>>(),
+    });
+    if let Some(identity) = backend_identity {
+        raw_evidence["backend"] = serde_json::json!({
+            "implementation": identity.implementation_id,
+            "protocolPack": identity.protocol_pack,
+            "protocolVersion": identity.protocol_version,
+            "packVersion": identity.pack_version,
+        });
+    }
+    AdapterResult {
+        status,
+        adapter: adapter.into(),
+        category: result.category,
+        message: result.message,
+        evidence_tier,
+        raw_evidence: Some(raw_evidence),
+        normalized_evidence: result.normalized,
+    }
+}
+
+fn hc_evidence_payload(evidence: HcEvidence) -> serde_json::Value {
+    let HcEvidence { kind, raw } = evidence;
+    match raw {
+        serde_json::Value::Object(mut fields) => {
+            fields.insert("kind".into(), serde_json::Value::String(kind));
+            serde_json::Value::Object(fields)
+        }
+        raw => serde_json::json!({
+            "kind": kind,
+            "raw": raw,
+        }),
+    }
+}
+
+fn substitute_hc_command(
+    command: &crate::hc::HcCommand,
     context: Option<&TestContext>,
-) -> Result<crate::e2e::types::E2eCommand, String> {
+) -> Result<crate::hc::HcCommand, String> {
     let Some(context) = context else {
         return Ok(command.clone());
     };

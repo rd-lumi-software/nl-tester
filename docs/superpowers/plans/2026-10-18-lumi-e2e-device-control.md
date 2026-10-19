@@ -14,7 +14,7 @@
 
 In scope:
 
-- `platform: lumi_e2e` and `journey: system_journey` for single-device control.
+- `platform: lumi_hc` and `journey: system_journey` for single-device control.
 - Profile loading and capability preflight.
 - HC health, device discovery, state readback, control, and WebSocket realtime readback.
 - Canonical mapping for v3 `cell_id`, `cell_model_id`, `cell_idx`, slot state, and events.
@@ -79,7 +79,7 @@ npm.cmd --version
 The contract document must include at least one YAML example:
 
 ```yaml
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: profiles/lumi-iot-v3-home-controller.yaml
 defaultTimeout: 15000
@@ -114,7 +114,7 @@ tags: [smoke, device-control]
 - Read: `D:\\nl-tester\\lumi-tester\\src\\report\\types.rs`
 - Create design evidence: the active `.process/<timestamp>_.../tasks/...` file in `D:\\lumi-iot-v3`
 
-- [ ] Decide whether E2E commands are represented as an extension of `TestCommand` or dispatched through a dedicated `E2eCommand` branch while preserving old commands.
+- [ ] Keep HC commands represented by the dedicated `TestCommand::V3` branch while preserving App commands.
 - [ ] Define the adapter traits and ownership boundaries before implementation:
   - profile resolver;
   - capability preflight;
@@ -136,12 +136,12 @@ tags: [smoke, device-control]
 - Modify: `D:\\nl-tester\\lumi-tester\\src\\parser\\types.rs`
 - Modify: `D:\\nl-tester\\lumi-tester\\src\\parser\\yaml.rs`
 - Modify: `D:\\nl-tester\\lumi-tester\\src\\main.rs`
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\profile.rs`
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\types.rs`
-- Create: `D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_e2e\\profiles\\lumi-iot-v3-home-controller.yaml`
-- Create: `D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_e2e\\system\\device_control_smoke.yaml`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\profile.rs`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\types.rs`
+- Create: `D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_hc\\profiles\\lumi-iot-v3-home-controller.yaml`
+- Create: `D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_hc\\system\\device_control_smoke.yaml`
 
-- [ ] Parse `platform: lumi_e2e` without changing existing platform parsing.
+- [ ] Parse `platform: lumi_hc` without changing existing App platform parsing.
 - [ ] Parse `journey: system_journey` and reject unsupported journey/command combinations with actionable validation errors.
 - [ ] Resolve profile paths relative to the YAML flow, never relative to a hard-coded checkout path.
 - [ ] Validate required profile fields and capability declarations before connecting to a target.
@@ -153,10 +153,10 @@ tags: [smoke, device-control]
 
 **Files:**
 
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\canonical.rs`
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\protocol_pack.rs`
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\result.rs`
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\evidence.rs`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\canonical.rs`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\profile.rs`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\result.rs`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\evidence.rs`
 
 - [ ] Represent entity identity, Cell metadata, indexed state, event type, timestamp, source, and optional correlation ID.
 - [ ] Preserve raw JSON values and normalize only fields declared by the v3 pack.
@@ -169,10 +169,10 @@ tags: [smoke, device-control]
 
 **Files:**
 
-- Create: `D:\\nl-tester\\lumi-tester\\src\\e2e\\adapter\\mod.rs`
-- Create: `D:\\nl-tester\\lumi-tester\\src\\e2e\\adapter\\http.rs`
-- Create: `D:\\nl-tester\\lumi-tester\\src\\e2e\\adapter\\websocket.rs`
-- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\e2e\\session.rs`
+- Create: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\mod.rs`
+- Create: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\http.rs`
+- Create: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\websocket.rs`
+- Create/modify: `D:\\nl-tester\\lumi-tester\\src\\hc\\backends\\v3\\runtime\\mod.rs`
 - Modify: `D:\\nl-tester\\lumi-tester\\src\\runner\\executor.rs`
 
 - [ ] Implement health/readiness against the configured v3 route.
@@ -204,7 +204,7 @@ tags: [smoke, device-control]
 
 - Create: `D:\\nl-tester\\lumi-tester\\tests\\e2e_device_control.rs`
 - Create: `D:\\nl-tester\\lumi-tester\\tests\\fixtures\\lumi_iot_v3\\...`
-- Create: `D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_e2e\\system\\device_control_smoke.yaml`
+- Create: `D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_hc\\system\\device_control_smoke.yaml`
 - Modify: `D:\\nl-tester\\lumi-tester\\docs\\writing_tests.md`
 - Modify: `D:\\nl-tester\\lumi-tester\\docs\\cli-reference.md`
 
@@ -223,8 +223,8 @@ $env:Path = "C:\\Users\\Admin\\.cargo\\bin;C:\\Program Files\\nodejs;C:\\Program
 cargo fmt --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml -- --check
 cargo test --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml --lib
 cargo test --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml --test e2e_device_control
-cargo run --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml -- validate D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_e2e\\system\\device_control_smoke.yaml --json
-cargo run --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml -- list D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_e2e\\system\\device_control_smoke.yaml --json
+cargo run --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml -- validate D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_hc\\system\\device_control_smoke.yaml --json
+cargo run --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml -- list D:\\nl-tester\\lumi-tester\\e2e\\workspaces\\lumi_hc\\system\\device_control_smoke.yaml --json
 ```
 
 ## Task 9: Review, integration, and completion audit
@@ -237,7 +237,7 @@ cargo run --manifest-path D:\\nl-tester\\lumi-tester\\Cargo.toml -- list D:\\nl-
 - [ ] Run the code-reviewer after every implementation task as required by the harness.
 - [ ] Run the complete Rust test suite and targeted E2E harness tests.
 - [ ] Run existing App/hardware parser and report tests to prove backward compatibility.
-- [ ] Run validation/listing for legacy YAML and new `lumi_e2e` YAML.
+- [ ] Run validation/listing for the supported `lumi_hc` YAML.
 - [ ] Attempt real v3 preflight only if a local HC endpoint/profile is available; otherwise record `blocked` with the missing capability and keep mock evidence separate.
 - [ ] Verify no source, test, docs, or script performs commit, push, tag, or PR operations.
 - [ ] Verify SRS acceptance criteria one by one against concrete test/report evidence before marking the goal complete.

@@ -103,28 +103,15 @@ fn journey_is_warning_metadata_and_not_adapter_selection() {
 }
 
 #[test]
-fn legacy_lumi_e2e_profile_normalizes_to_gateway_hc() {
+fn removed_lumi_e2e_platform_is_rejected() {
     let source = Path::new("tests/fixtures/multi_target/legacy-hc.yaml");
-    let flow = parse_yaml_content(
+    let error = parse_yaml_content(
         "platform: lumi_e2e\nprofile: profiles/hc.yaml\n---\n- hcHealth\n",
         source,
     )
-    .unwrap();
+    .expect_err("removed lumi_e2e must not be accepted as a public platform");
 
-    let normalized = normalize_flow(flow, source).unwrap();
-
-    assert_eq!(normalized.components.len(), 1);
-    let gateway = normalized.components.get(&TargetId::Gateway).unwrap();
-    assert_eq!(gateway.platform, "lumi_hc");
-    assert_eq!(
-        gateway.profile.as_deref(),
-        Some(Path::new("tests/fixtures/multi_target/profiles/hc.yaml"))
-    );
-    assert!(normalized
-        .legacy_metadata
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "DeprecatedLegacyProfile"));
+    assert!(format!("{error:#}").contains("unknown variant"), "{error:#}");
 }
 
 #[test]

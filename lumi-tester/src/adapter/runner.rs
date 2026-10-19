@@ -73,8 +73,15 @@ pub struct MultiTargetRunner {
 
 impl MultiTargetRunner {
     pub fn standard(flow: NormalizedFlow) -> anyhow::Result<Self> {
+        Self::standard_with_adapter_registry(flow, AdapterRegistry::standard())
+    }
+
+    /// Build a runner with an explicitly supplied adapter and HC backend registry.
+    pub fn standard_with_adapter_registry(
+        flow: NormalizedFlow,
+        registry: AdapterRegistry,
+    ) -> anyhow::Result<Self> {
         validate_flow_graph(&flow)?;
-        let registry = AdapterRegistry::standard();
         let adapters = flow
             .components
             .iter()
@@ -209,7 +216,10 @@ impl MultiTargetRunner {
         let source = self.flow.source_path.clone();
         if let Some(index) = self.options.command_index {
             if index >= commands.len() {
-                anyhow::bail!("command index {index} is out of range ({} commands)", commands.len());
+                anyhow::bail!(
+                    "command index {index} is out of range ({} commands)",
+                    commands.len()
+                );
             }
             self.selected_root_index = Some(index);
         } else if let Some(index) = self.options.from_command_index {
@@ -264,11 +274,14 @@ impl MultiTargetRunner {
             .events()
             .iter()
             .any(|event| event.status == AdapterStatus::Error);
-        let lifecycle_failed = self.session.events().iter().any(|event| {
-            matches!(event.status, AdapterStatus::Failed)
-        }) || close_results
+        let lifecycle_failed = self
+            .session
+            .events()
             .iter()
-            .any(|result| result.status == AdapterStatus::Failed);
+            .any(|event| matches!(event.status, AdapterStatus::Failed))
+            || close_results
+                .iter()
+                .any(|result| result.status == AdapterStatus::Failed);
         let lifecycle_blocked = close_results
             .iter()
             .any(|result| result.status == AdapterStatus::Blocked);
@@ -306,13 +319,8 @@ impl MultiTargetRunner {
     ) -> anyhow::Result<()> {
         std::fs::create_dir_all(output)?;
         let mut artifact = serde_json::to_value(report)?;
-        artifact["flows"] = serde_json::Value::Array(
-            report
-                .operations
-                .iter()
-                .map(legacy_flow_artifact)
-                .collect(),
-        );
+        artifact["flows"] =
+            serde_json::Value::Array(report.operations.iter().map(legacy_flow_artifact).collect());
         artifact["summary"] = serde_json::json!({
             "sessionId": report.session_id,
             "totalFlows": report.operations.len(),
@@ -390,17 +398,13 @@ impl MultiTargetRunner {
                 continue;
             }
             if depth > 0
-                && self
-                    .options
-                    .command_name
-                    .as_deref()
-                    .is_some_and(|name| {
-                        !matches!(command, TestCommand::RunFlow(_))
-                            && !command
-                                .display_name()
-                                .to_ascii_lowercase()
-                                .starts_with(&name.to_ascii_lowercase())
-                    })
+                && self.options.command_name.as_deref().is_some_and(|name| {
+                    !matches!(command, TestCommand::RunFlow(_))
+                        && !command
+                            .display_name()
+                            .to_ascii_lowercase()
+                            .starts_with(&name.to_ascii_lowercase())
+                })
             {
                 continue;
             }
@@ -477,15 +481,12 @@ impl MultiTargetRunner {
                 result,
             });
             if !self.options.continue_on_failure
-                && self
-                    .operations
-                    .last()
-                    .is_some_and(|operation| {
-                        matches!(
-                            operation.result.status,
-                            AdapterStatus::Failed | AdapterStatus::Error
-                        )
-                    })
+                && self.operations.last().is_some_and(|operation| {
+                    matches!(
+                        operation.result.status,
+                        AdapterStatus::Failed | AdapterStatus::Error
+                    )
+                })
             {
                 self.stopped = true;
                 return Ok(());
@@ -516,12 +517,10 @@ fn run_flow_condition_is_true(condition: &serde_json::Value) -> bool {
     match condition {
         serde_json::Value::Bool(value) => *value,
         serde_json::Value::Null => false,
-        serde_json::Value::String(value) => {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "" | "false" | "0" | "no"
-            )
-        }
+        serde_json::Value::String(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "false" | "0" | "no"
+        ),
         _ => true,
     }
 }
@@ -681,14 +680,18 @@ impl TargetAdapter for MockGatewayAdapter {
     fn execute(&mut self, command: &TestCommand, _scope: &TargetScope) -> AdapterResult {
         let mut world = self.world.lock().expect("mock world lock");
         let (operation, requested) = match command {
-            TestCommand::E2e(crate::e2e::types::E2eCommand::HcControl(params)) => {
+            TestCommand::V3(
+                crate::hc::backends::v3::runtime::types::V3Command::HcControl(params),
+            ) => {
                 let requested = params.state.iter().any(|change| {
                     change.idx == 0 && serde_json::to_value(&change.value).ok() == Some(json!(true))
                 });
                 world.device_on = requested;
                 ("control", requested)
             }
-            TestCommand::E2e(crate::e2e::types::E2eCommand::HcWaitState(params)) => {
+            TestCommand::V3(
+                crate::hc::backends::v3::runtime::types::V3Command::HcWaitState(params),
+            ) => {
                 let requested = params.state.iter().any(|change| {
                     change.idx == 0 && serde_json::to_value(&change.value).ok() == Some(json!(true))
                 });

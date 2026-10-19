@@ -82,7 +82,7 @@ git status.
 - lumi-tester/tests/fixtures/multi_target/child-header-conflict.yaml — driver
   isolation fixture.
 
-Existing lumi-tester/src/e2e/*.rs and current HC tests are modified only when
+Existing lumi-tester/src/hc/backends/v3/runtime/*.rs and current HC tests are modified only when
 needed to implement the generic gateway adapter boundary. Their HC wire facts are
 checked only against D:\lumi-iot-v3.
 
@@ -135,7 +135,7 @@ legacy_app_header_normalizes_to_one_app_component
 new_app_component_normalizes_to_the_same_app_adapter_shape
 peer_components_normalize_to_app_gateway_cloud
 journey_is_warning_metadata_and_not_adapter_selection
-legacy_lumi_e2e_profile_normalizes_to_gateway_hc
+removed_legacy_hc_platform_is_rejected
 conflicting_legacy_app_fields_are_rejected
 ~~~
 
@@ -209,7 +209,7 @@ Implement these exact normalization rules:
 1. Legacy platform/appId creates TargetId::App.
 2. Canonical app, gateway, and cloud create peer entries.
 3. journey is retained as metadata and emits a deprecation diagnostic.
-4. lumi_e2e is accepted only as a legacy HC alias.
+4. Only `lumi_hc` is accepted as the public HC platform; old aliases are rejected.
 5. Matching duplicate App declarations are accepted; conflicting values return a
    structured parser/validation error.
 6. Component profile paths resolve relative to the declaring YAML file.
@@ -293,8 +293,8 @@ fixtures return structured validation errors; legacy App fixture remains valid.
 - Create: lumi-tester/src/adapter/lifecycle.rs
 - Create: lumi-tester/src/adapter/cloud_mock.rs
 - Modify: lumi-tester/src/lib.rs
-- Modify: lumi-tester/src/e2e/mod.rs
-- Modify: lumi-tester/src/e2e/profile.rs
+- Modify: lumi-tester/src/hc/backends/v3/mod.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/profile.rs
 - Create/modify: lumi-tester/tests/multi_target_runner.rs
 
 Write failing unit/integration tests before implementation:
@@ -325,7 +325,7 @@ pub trait TargetAdapter {
 
 The App implementation wraps the current PlatformDriver. The gateway
 implementation wraps current HC HTTP/WebSocket/evidence code. The Cloud adapter
-is deterministic and rejects real network access. Keep E2eResult status and
+is deterministic and rejects real network access. Keep V3Result status and
 evidence tier intact instead of collapsing it into an ordinary executor error.
 
 Run:
@@ -438,8 +438,8 @@ legacy App report fixtures still deserialize and render.
 **Files:**
 
 - Modify: lumi-tester/src/adapter/cloud_mock.rs
-- Modify: lumi-tester/src/e2e/http.rs only where injection is required
-- Modify: lumi-tester/src/e2e/websocket.rs only where injection is required
+- Modify: lumi-tester/src/hc/backends/v3/runtime/http.rs only where injection is required
+- Modify: lumi-tester/src/hc/backends/v3/runtime/websocket.rs only where injection is required
 - Create: lumi-tester/tests/fixtures/multi_target/parent.yaml
 - Create: lumi-tester/tests/fixtures/multi_target/app.yaml
 - Create: lumi-tester/tests/fixtures/multi_target/gateway.yaml
@@ -549,7 +549,7 @@ Run:
 ~~~powershell
 git diff --check
 git diff --stat
-rg -n "journey.*platform|platform.*journey|lumi_e2e|target-codex|target-review" lumi-tester/src lumi-tester/schema
+rg -n "journey.*platform|platform.*journey|target-codex|target-review" lumi-tester/src lumi-tester/schema
 cargo fmt --manifest-path lumi-tester/Cargo.toml -- --check
 cargo test --manifest-path lumi-tester/Cargo.toml --test multi_target_yaml
 cargo test --manifest-path lumi-tester/Cargo.toml --test multi_target_runner

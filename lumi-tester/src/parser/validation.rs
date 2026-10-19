@@ -253,9 +253,9 @@ fn collect_routes(
 
 fn validate_command_target(command: &TestCommand, target: TargetId) -> Result<()> {
     let supported = match target {
-        TargetId::Gateway => matches!(command, TestCommand::E2e(_)),
-        TargetId::App => !matches!(command, TestCommand::E2e(_)),
-        TargetId::Cloud => !matches!(command, TestCommand::E2e(_)),
+        TargetId::Gateway => matches!(command, TestCommand::V3(_)),
+        TargetId::App => !matches!(command, TestCommand::V3(_)),
+        TargetId::Cloud => !matches!(command, TestCommand::V3(_)),
     };
     if !supported {
         return Err(FlowValidationError::UnsupportedCommandForTarget {

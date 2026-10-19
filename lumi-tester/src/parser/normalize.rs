@@ -38,7 +38,7 @@ pub fn normalize_flow(flow: TestFlow, source_path: &Path) -> Result<NormalizedFl
         .unwrap_or_default();
 
     if let (Some(app), Some(platform)) = (flow.app.as_ref(), flow.platform.as_ref()) {
-        if !matches!(platform, Platform::LumiE2e | Platform::LumiHc | Platform::LumiCloud)
+        if !matches!(platform, Platform::LumiHc | Platform::LumiCloud)
             && (app.platform != platform_name(platform)
                 || flow
                     .app_id
@@ -102,7 +102,7 @@ pub fn normalize_flow(flow: TestFlow, source_path: &Path) -> Result<NormalizedFl
                     source: ComponentSource::LegacyApp,
                 },
             );
-        } else if matches!(platform, Platform::LumiE2e | Platform::LumiHc)
+        } else if platform == &Platform::LumiHc
             && !components.contains_key(&TargetId::Gateway)
         {
             components.insert(
@@ -195,7 +195,6 @@ pub fn platform_name(platform: &Platform) -> &'static str {
         Platform::Web => "web",
         Platform::Macos => "macos",
         Platform::Windows => "windows",
-        Platform::LumiE2e => "lumi_e2e",
         Platform::LumiHc => "lumi_hc",
         Platform::LumiCloud => "lumi_cloud",
     }

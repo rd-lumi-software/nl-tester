@@ -17,12 +17,12 @@
 | lumi-tester/src/hc/mod.rs | HC domain module wiring and re-exports. |
 | lumi-tester/src/hc/command.rs | Protocol-neutral health/discovery/state/control/wait commands. |
 | lumi-tester/src/hc/result.rs | Normalized observations, backend result, capability, and evidence types. |
-| lumi-tester/src/hc/backend.rs | HcProtocolBackend trait and factory errors. |
+| lumi-tester/src/hc/backend.rs | HcProtocolBackend trait, HcExecutionScope, and factory errors. |
 | lumi-tester/src/hc/factory.rs | Profile identity to backend registration and v3 construction. |
 | lumi-tester/src/adapter/registry.rs | HC lifecycle facade and command/result conversion; no wire-format logic. |
-| lumi-tester/src/e2e/v3_backend.rs | V3 backend owning the existing HTTP/WebSocket runtime. |
-| lumi-tester/src/e2e/profile.rs | Common profile parsing plus v3 transport validation and compatibility aliases. |
-| lumi-tester/src/e2e/types.rs | Existing YAML command parsing and compatibility conversion. |
+| lumi-tester/src/hc/backends/v3/mod.rs | V3 backend owning the existing HTTP/WebSocket runtime. |
+| lumi-tester/src/hc/backends/v3/runtime/profile.rs | V3 profile parsing and transport validation. |
+| lumi-tester/src/hc/backends/v3/runtime/types.rs | V3 YAML command representation and conversion. |
 | lumi-tester/tests/hc_backend_contract.rs | Fake backend and reusable backend contract tests. |
 | lumi-tester/tests/e2e_hc_contract.rs | Existing v3 wire contract tests. |
 | lumi-tester/tests/e2e_parser_profile.rs | Parser/profile compatibility and unknown-backend tests. |
@@ -43,9 +43,9 @@ Do not add HCG1 MQTT/TLS files in this phase. Do not change Android/iOS driver m
 
 Use the existing mock HTTP transport and ControlChange fixture. Assert one control POST, an indexed body containing idx and value, and a following state readback matching the requested value. Do not call a real HC.
 
-- [ ] Step 2: Add a legacy YAML compatibility assertion.
+- [ ] Step 2: Add an unsupported-platform assertion.
 
-Assert that platform: lumi_e2e with profiles/hc.yaml and hcHealth normalizes to TargetId::Gateway, platform lumi_hc, and the same profile reference.
+Assert that an unsupported old HC platform is rejected, while platform: lumi_hc with profiles/hc.yaml and hcHealth normalizes to TargetId::Gateway and preserves the profile reference.
 
 - [ ] Step 3: Add a report-shape assertion.
 
@@ -125,13 +125,13 @@ git commit -m "refactor: add protocol-neutral HC domain types"
 - Create: lumi-tester/src/hc/backend.rs
 - Create: lumi-tester/src/hc/factory.rs
 - Modify: lumi-tester/src/hc/mod.rs
-- Modify: lumi-tester/src/e2e/profile.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/profile.rs
 - Test: lumi-tester/tests/hc_backend_contract.rs
 - Test: lumi-tester/tests/e2e_parser_profile.rs
 
 - [ ] Step 1: Define the backend trait.
 
-Use this boundary with imports from `crate::hc`, `crate::runner::context::TestContext`, and `crate::adapter::traits::TargetScope`:
+Use this boundary with imports from `crate::hc` and `crate::runner::context::TestContext`. The HC module owns HcExecutionScope so it does not depend on adapter modules:
 
 ~~~rust
 pub trait HcProtocolBackend: Send {
@@ -140,7 +140,7 @@ pub trait HcProtocolBackend: Send {
     fn capabilities(&self) -> &[HcCapability];
     fn preflight(&mut self, context: &TestContext) -> HcBackendResult;
     fn open(&mut self, context: &TestContext) -> HcBackendResult;
-    fn execute(&mut self, command: &HcCommand, scope: &TargetScope) -> HcBackendResult;
+    fn execute(&mut self, command: &HcCommand, scope: &HcExecutionScope) -> HcBackendResult;
     fn close(&mut self, context: &TestContext) -> HcBackendResult;
 }
 ~~~
@@ -184,23 +184,23 @@ Expected: current v3 profile tests and factory tests pass.
 - [ ] Step 6: Commit.
 
 ~~~powershell
-git add lumi-tester/src/hc lumi-tester/src/e2e/profile.rs lumi-tester/tests/hc_backend_contract.rs lumi-tester/tests/e2e_parser_profile.rs
+git add lumi-tester/src/hc lumi-tester/tests/hc_backend_contract.rs lumi-tester/tests/e2e_parser_profile.rs
 git commit -m "refactor: define extensible HC backend contract"
 ~~~
 
 ## Task 4: Move v3 execution behind the backend boundary
 
 **Files:**
-- Create: lumi-tester/src/e2e/v3_backend.rs
-- Modify: lumi-tester/src/e2e/mod.rs
-- Modify: lumi-tester/src/e2e/http.rs
-- Modify: lumi-tester/src/e2e/websocket.rs
-- Modify: lumi-tester/src/e2e/result.rs
-- Modify: lumi-tester/src/e2e/evidence.rs
+- Create: lumi-tester/src/hc/backends/v3/mod.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/mod.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/http.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/websocket.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/result.rs
+- Modify: lumi-tester/src/hc/backends/v3/runtime/evidence.rs
 - Modify: lumi-tester/src/hc/factory.rs
 - Test: lumi-tester/tests/e2e_hc_contract.rs
 
-- [ ] Step 1: Create V3HcProtocolBackend as the owner of E2eRuntime.
+- [ ] Step 1: Create V3HcProtocolBackend as the owner of V3Runtime.
 
 Move or wrap existing runtime construction, profile loading, endpoint substitution, evidence writer setup, and HTTP/WebSocket execution in V3HcProtocolBackend. Keep v3 wire details inside this file or the existing transport modules. Implement the new trait and return HcBackendResult.
 
@@ -231,7 +231,7 @@ Expected: route, payload, retry, WebSocket, redaction, evidence, and parser/prof
 - [ ] Step 5: Commit.
 
 ~~~powershell
-git add lumi-tester/src/e2e lumi-tester/src/hc/factory.rs lumi-tester/tests/e2e_hc_contract.rs lumi-tester/tests/e2e_parser_profile.rs
+git add lumi-tester/src/hc/backends/v3 lumi-tester/src/hc/factory.rs lumi-tester/tests/e2e_hc_contract.rs lumi-tester/tests/e2e_parser_profile.rs
 git commit -m "refactor: route v3 HC execution through backend"
 ~~~
 
@@ -242,7 +242,7 @@ git commit -m "refactor: route v3 HC execution through backend"
 - Test: lumi-tester/tests/multi_target_runner.rs
 - Test: lumi-tester/tests/multi_target_yaml.rs
 
-- [ ] Step 1: Replace direct E2eRuntime ownership.
+- [ ] Step 1: Replace direct V3Runtime ownership.
 
 Change HcGatewayAdapter to own a selected Box<dyn HcProtocolBackend> plus common profile/context state. It may retain profile and source paths for loading, but it must not call v3 HTTP or WebSocket methods directly.
 
@@ -251,11 +251,11 @@ Change HcGatewayAdapter to own a selected Box<dyn HcProtocolBackend> plus common
 Implement one private conversion function:
 
 ~~~text
-TestCommand::E2e(HcHealth)             -> HcCommand::Health
-TestCommand::E2e(HcGetEntities)       -> HcCommand::GetEntities
-TestCommand::E2e(HcGetState(params))  -> HcCommand::GetState { entity }
-TestCommand::E2e(HcControl(params))   -> HcCommand::Control { entity, updates }
-TestCommand::E2e(HcWaitState(params)) -> HcCommand::WaitState { entity, expected }
+TestCommand::V3(HcHealth)             -> HcCommand::Health
+TestCommand::V3(HcGetEntities)       -> HcCommand::GetEntities
+TestCommand::V3(HcGetState(params))  -> HcCommand::GetState { entity }
+TestCommand::V3(HcControl(params))   -> HcCommand::Control { entity, updates }
+TestCommand::V3(HcWaitState(params)) -> HcCommand::WaitState { entity, expected }
 ~~~
 
 Keep WebSocket-specific commands either mapped to backend-neutral realtime commands or rejected at this boundary with the existing deterministic error. Do not add protocol checks to the multi-target runner.
@@ -357,7 +357,7 @@ git commit -m "test: add reusable HC backend contract harness"
 
 - [ ] Step 1: Document the supported phase-1 boundary.
 
-State that production support is lumi_iot_v3_home_controller over HTTP/WebSocket, platform: lumi_hc selects the gateway target, and platform: lumi_e2e is legacy compatibility only. State explicitly that HCG1 is an extension target, not a supported runtime in this phase.
+State that production support is lumi_iot_v3_home_controller over HTTP/WebSocket, platform: lumi_hc selects the gateway target, and old HC platform aliases are rejected. State explicitly that HCG1 is an extension target, not a supported runtime in this phase.
 
 - [ ] Step 2: Document how to add a future backend.
 
@@ -448,7 +448,7 @@ Expected: only planned files changed, no credentials or real HC endpoints are co
 - [ ] Fake backend runs health, discovery, control, state, and readback through the existing runner.
 - [ ] A second fake backend uses the same semantic flow with only backend/profile registration changed.
 - [ ] Unknown backend identities fail deterministically.
-- [ ] Existing report, evidence, status, and legacy lumi_e2e compatibility behavior remains intact.
+- [ ] Existing report, evidence, status, and unsupported-platform behavior remains intact.
 - [ ] Android/iOS code and YAML behavior are unchanged.
 - [ ] No HCG1 MQTT/TLS or production protocol implementation is included.
 - [ ] Future adapter instructions are documented at lumi-tester/docs/hc-adapter-development.md.

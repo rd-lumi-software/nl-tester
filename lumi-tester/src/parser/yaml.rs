@@ -6,7 +6,7 @@ use super::types::{
     ScrollUntilVisibleParams, SetVarParams, TapAtParams, TapParams, TapParamsInput, TestCommand,
     TestFlow, WaitParams, WaitParamsInput, WhenParams,
 };
-use crate::e2e::types::{deferred_command_message, parse_e2e_command};
+use crate::hc::backends::v3::runtime::types::{deferred_command_message, parse_v3_command};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -641,8 +641,8 @@ pub fn parse_command_value(value: &serde_yaml::Value) -> Result<Option<TestComma
                 anyhow::bail!("{message}");
             }
 
-            if let Some(command) = parse_e2e_command(cmd_name, params)? {
-                return Ok(Some(TestCommand::E2e(command)));
+            if let Some(command) = parse_v3_command(cmd_name, params)? {
+                return Ok(Some(TestCommand::V3(command)));
             }
 
             // If params is null or empty map, try simple command first
@@ -669,8 +669,8 @@ fn parse_simple_command(name: &str) -> Result<Option<TestCommand>> {
     if let Some(message) = deferred_command_message(name) {
         anyhow::bail!("{message}");
     }
-    if let Some(command) = parse_e2e_command(name, &serde_yaml::Value::Null)? {
-        return Ok(Some(TestCommand::E2e(command)));
+    if let Some(command) = parse_v3_command(name, &serde_yaml::Value::Null)? {
+        return Ok(Some(TestCommand::V3(command)));
     }
 
     let cmd = match name {

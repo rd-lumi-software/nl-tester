@@ -1,5 +1,10 @@
 # Developer evidence — 2026-10-18-14-56-25_implement-hc-http-ws-canonical-evidence
 
+> Historical evidence from before the HC backend rename. The names and paths
+> recorded below describe that earlier run; the current public platform is
+> `lumi_hc`, the V3 runtime lives under `lumi-tester/src/hc/backends/v3`, and
+> the old HC platform alias is rejected.
+
 ## Rework result
 
 Execution-first TDD completed for the five requested gaps.

@@ -2,9 +2,19 @@ use lumi_tester::adapter::{
     AdapterRegistry, AdapterResult, AdapterStatus, MultiTargetRunner, TargetAdapter, TargetScope,
     TargetSession,
 };
+use lumi_tester::hc::{
+    HcBackendConfig, HcBackendDescriptor, HcBackendRegistry, HcBackendResult, HcCapability,
+    HcCommand, HcEntity, HcEvidence, HcEvidenceTier, HcExecutionScope, HcObservation,
+    HcProtocolBackend, HcState, HcStateUpdate,
+};
 use lumi_tester::parser::normalize::normalize_flow;
 use lumi_tester::parser::types::{ComponentSource, ComponentSpec, TargetId, TestCommand};
+use lumi_tester::parser::validation::validate_flow_graph;
 use lumi_tester::runner::context::TestContext;
+use serde_json::json;
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -90,12 +100,8 @@ async fn attached_app_adapter_delegates_to_existing_executor() {
     let output = unique_temp_dir("attached-app");
     let driver: Box<dyn lumi_tester::driver::traits::PlatformDriver> =
         Box::new(lumi_tester::driver::windows::WindowsDriver::new());
-    let mut runner = MultiTargetRunner::standard_with_app_driver(
-        normalized,
-        driver,
-        &output,
-    )
-    .unwrap();
+    let mut runner =
+        MultiTargetRunner::standard_with_app_driver(normalized, driver, &output).unwrap();
 
     let report = runner.run().unwrap();
 
@@ -125,6 +131,276 @@ fn gateway_preflight_uses_profile_and_reports_unresolved_environment() {
     assert_eq!(gateway.result.status, AdapterStatus::Blocked);
     assert_eq!(gateway.result.category, "NoLab");
     assert!(gateway.result.message.contains("endpoint environment"));
+}
+
+#[test]
+fn custom_hc_backend_supports_generic_validate_list_run_and_artifacts() {
+    let dir = unique_temp_dir("custom-hc-backend");
+    fs::create_dir_all(dir.join("profiles")).unwrap();
+    let source = dir.join("generic-hc.yaml");
+    fs::write(
+        dir.join("profiles/fake.yaml"),
+        "implementation: fake-home-controller\nprotocolPack: fake-pack\nprotocolVersion: 1.0\npackVersion: 2.0\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("profiles/second.yaml"),
+        "implementation: second-home-controller\nprotocolPack: second-pack\nprotocolVersion: 3.0\npackVersion: 4.0\n",
+    )
+    .unwrap();
+    fs::write(
+        &source,
+        "platform: lumi_hc\nprofile: profiles/fake.yaml\n---\n- hcHealth\n- hcGetState:\n    entity: \"123\"\n",
+    )
+    .unwrap();
+    let second_source = dir.join("second-hc.yaml");
+    fs::write(
+        &second_source,
+        "platform: lumi_hc\nprofile: profiles/second.yaml\n---\n- hcHealth\n- hcGetState:\n    entity: \"123\"\n",
+    )
+    .unwrap();
+
+    let flow = lumi_tester::parser::yaml::parse_test_file(&source).unwrap();
+    let normalized = normalize_flow(flow, &source).unwrap();
+    validate_flow_graph(&normalized).unwrap();
+    let listed = normalized
+        .commands
+        .iter()
+        .map(TestCommand::display_name)
+        .collect::<Vec<_>>();
+    assert_eq!(listed, vec!["hcHealth", "hcGetState"]);
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let constructor_calls = calls.clone();
+    let backend_calls = calls.clone();
+    let mut hc_registry = HcBackendRegistry::empty();
+    hc_registry
+        .register(
+            HcBackendDescriptor::new("fake-home-controller", "fake-pack", "1.0", "2.0"),
+            move |config| {
+                constructor_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("construct:{}", config.implementation));
+                Box::new(ContractHcBackend::new(config, backend_calls.clone()))
+            },
+        )
+        .unwrap();
+    let second_constructor_calls = calls.clone();
+    let second_backend_calls = calls.clone();
+    hc_registry
+        .register(
+            HcBackendDescriptor::new("second-home-controller", "second-pack", "3.0", "4.0"),
+            move |config| {
+                second_constructor_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("construct:{}", config.implementation));
+                Box::new(ContractHcBackend::new(config, second_backend_calls.clone()))
+            },
+        )
+        .unwrap();
+
+    let registry = AdapterRegistry::with_hc_backend_registry(hc_registry.clone());
+    let output = dir.join("out");
+    let mut runner =
+        MultiTargetRunner::standard_with_adapter_registry(normalized, registry).unwrap();
+    let report = runner.run().unwrap();
+
+    assert_eq!(report.status, AdapterStatus::Passed);
+    assert_eq!(report.operations.len(), 2);
+    assert!(report
+        .operations
+        .iter()
+        .all(|operation| operation.adapter == "lumi_hc"));
+    assert!(report.operations.iter().all(|operation| {
+        operation.result.evidence_tier.as_deref() == Some("mock_conformance")
+    }));
+    MultiTargetRunner::write_artifacts(&report, &output).unwrap();
+    assert!(output.join("run.json").is_file());
+    assert!(output.join("test-results.json").is_file());
+
+    {
+        let calls = calls.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|call| call == "construct:fake-home-controller"));
+        assert!(calls
+            .iter()
+            .any(|call| call.starts_with("execute:hcGetState:123:")));
+        assert!(calls.iter().any(|call| call == "lifecycle:preflight"));
+        assert!(calls.iter().any(|call| call == "lifecycle:open"));
+        assert!(calls.iter().any(|call| call == "lifecycle:close"));
+    }
+
+    let second_flow = lumi_tester::parser::yaml::parse_test_file(&second_source).unwrap();
+    let second_normalized = normalize_flow(second_flow, &second_source).unwrap();
+    validate_flow_graph(&second_normalized).unwrap();
+    let second_registry = AdapterRegistry::with_hc_backend_registry(hc_registry);
+    let mut second_runner =
+        MultiTargetRunner::standard_with_adapter_registry(second_normalized, second_registry)
+            .unwrap();
+    let second_report = second_runner.run().unwrap();
+    assert_eq!(second_report.status, AdapterStatus::Passed);
+    assert_eq!(second_report.operations.len(), 2);
+    assert!(calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|call| call == "construct:second-home-controller"));
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn stateful_fake_backends_preserve_hc_semantics_and_artifacts() {
+    let dir = unique_temp_dir("stateful-hc-backends");
+    fs::create_dir_all(dir.join("profiles")).unwrap();
+    fs::write(
+        dir.join("profiles/fake-a.yaml"),
+        "implementation: fake-state-a\nprotocolPack: fake-pack-a\nprotocolVersion: 1.0\npackVersion: 1.0\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("profiles/fake-b.yaml"),
+        "implementation: fake-state-b\nprotocolPack: fake-pack-b\nprotocolVersion: 2.0\npackVersion: 2.0\n",
+    )
+    .unwrap();
+
+    let commands = "- hcHealth\n- hcGetEntities\n- hcGetState:\n    entity: \"123\"\n- hcControl:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: true\n- hcWaitState:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: true\n";
+    let source_a = write_stateful_flow(&dir, "stateful-a.yaml", "fake-a.yaml", commands);
+    let source_b = write_stateful_flow(&dir, "stateful-b.yaml", "fake-b.yaml", commands);
+
+    let (report_a, calls_a) = run_stateful_flow(&source_a);
+    let (report_b, calls_b) = run_stateful_flow(&source_b);
+    assert_eq!(report_a.status, AdapterStatus::Passed);
+    assert_eq!(report_b.status, AdapterStatus::Passed);
+    assert_eq!(report_a.operations.len(), 5);
+    assert_eq!(report_b.operations.len(), 5);
+
+    assert_eq!(execute_calls(&calls_a), execute_calls(&calls_b));
+    assert_eq!(
+        lifecycle_calls(&calls_a),
+        vec!["preflight", "open", "close"]
+    );
+    assert_eq!(
+        lifecycle_calls(&calls_b),
+        vec!["preflight", "open", "close"]
+    );
+    assert_eq!(report_a.operations[3].result.status, AdapterStatus::Passed);
+    assert_eq!(report_a.operations[4].result.status, AdapterStatus::Passed);
+    assert_eq!(
+        report_a.operations[3].result.raw_evidence.as_ref().unwrap()["readback"],
+        json!({"entity": "123", "state": [{"idx": 0, "value": true}]})
+    );
+    assert_eq!(
+        report_a.operations[4].result.raw_evidence.as_ref().unwrap()["assertion"],
+        json!({"readbackMatches": true})
+    );
+    assert_eq!(
+        report_a.operations[4].result.raw_evidence.as_ref().unwrap()["readback"],
+        json!({"entity": "123", "state": [{"idx": 0, "value": true}]})
+    );
+
+    for (left, right) in report_a.operations.iter().zip(&report_b.operations) {
+        assert_eq!(
+            hc_result_contract(&left.result),
+            hc_result_contract(&right.result)
+        );
+        assert_eq!(left.result.evidence_tier, right.result.evidence_tier);
+        assert!(left.result.raw_evidence.as_ref().unwrap()["evidence"]
+            .as_array()
+            .is_some_and(|evidence| !evidence.is_empty()));
+    }
+
+    let output_a = dir.join("out-a");
+    let output_b = dir.join("out-b");
+    MultiTargetRunner::write_artifacts(&report_a, &output_a).unwrap();
+    MultiTargetRunner::write_artifacts(&report_b, &output_b).unwrap();
+    assert_stateful_artifacts(&output_a, "fake-state-a", "fake-pack-a", "1.0", "1.0");
+    assert_stateful_artifacts(&output_b, "fake-state-b", "fake-pack-b", "2.0", "2.0");
+
+    let mismatch_source = write_stateful_flow(
+        &dir,
+        "stateful-mismatch.yaml",
+        "fake-a.yaml",
+        "- hcWaitState:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: true\n",
+    );
+    let mismatch_flow = lumi_tester::parser::yaml::parse_test_file(&mismatch_source).unwrap();
+    let mismatch_normalized = normalize_flow(mismatch_flow, &mismatch_source).unwrap();
+    validate_flow_graph(&mismatch_normalized).unwrap();
+    let mismatch_calls = Arc::new(Mutex::new(Vec::new()));
+    let mut mismatch_runner = MultiTargetRunner::standard_with_adapter_registry(
+        mismatch_normalized,
+        AdapterRegistry::with_hc_backend_registry(stateful_registry(mismatch_calls)),
+    )
+    .unwrap();
+    let mismatch_report = mismatch_runner.run().unwrap();
+    assert_eq!(mismatch_report.status, AdapterStatus::Failed);
+    assert_eq!(
+        mismatch_report.operations[0].result.category,
+        "readback_mismatch"
+    );
+    assert_eq!(
+        mismatch_report.operations[0]
+            .result
+            .raw_evidence
+            .as_ref()
+            .unwrap()["assertion"],
+        json!({"readbackMatches": false})
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn hc_gateway_close_preserves_backend_result_fields() {
+    let dir = unique_temp_dir("hc-close-result");
+    fs::create_dir_all(dir.join("profiles")).unwrap();
+    let source = dir.join("generic-hc.yaml");
+    let profile = dir.join("profiles/fake.yaml");
+    fs::write(
+        &profile,
+        "implementation: fake-home-controller\nprotocolPack: fake-pack\nprotocolVersion: 1.0\npackVersion: 2.0\n",
+    )
+    .unwrap();
+    fs::write(
+        &source,
+        "platform: lumi_hc\nprofile: profiles/fake.yaml\n---\n- hcHealth\n",
+    )
+    .unwrap();
+    let flow = lumi_tester::parser::yaml::parse_test_file(&source).unwrap();
+    let normalized = normalize_flow(flow, &source).unwrap();
+    let component = normalized.components.get(&TargetId::Gateway).unwrap();
+    let close_result = HcBackendResult::failed("close_category", "close message")
+        .with_evidence_tier(HcEvidenceTier::RealPreflight)
+        .with_evidence(HcEvidence::raw("close_raw", json!({"closed": false})));
+    let mut hc_registry = HcBackendRegistry::empty();
+    hc_registry
+        .register(
+            HcBackendDescriptor::new("fake-home-controller", "fake-pack", "1.0", "2.0"),
+            move |config| Box::new(CloseResultHcBackend::new(config, close_result.clone())),
+        )
+        .unwrap();
+
+    let registry = AdapterRegistry::with_hc_backend_registry(hc_registry);
+    let mut adapter = registry
+        .create_with_source(TargetId::Gateway, component, Some(&source))
+        .unwrap();
+    let context = TestContext::new(&dir, None, false, None);
+    assert_eq!(adapter.preflight(&context).status, AdapterStatus::Passed);
+    assert_eq!(adapter.open(&context).status, AdapterStatus::Passed);
+
+    let result = adapter.close(&context);
+    assert_eq!(result.status, AdapterStatus::Failed);
+    assert_eq!(result.category, "close_category");
+    assert_eq!(result.message, "close message");
+    assert_eq!(result.evidence_tier.as_deref(), Some("real_preflight"));
+    let close_evidence = result.raw_evidence.unwrap()["evidence"][0].clone();
+    assert_eq!(close_evidence["kind"], "close_raw");
+    assert_eq!(close_evidence["closed"], false);
+
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -287,14 +563,13 @@ fn nested_runflow_dispatches_cloud_target() {
 
 #[test]
 fn command_index_and_repeat_options_route_only_selected_root_flow() {
-    let mut runner = fixture_runner("parent.yaml").with_options(
-        lumi_tester::adapter::MultiTargetRunOptions {
+    let mut runner =
+        fixture_runner("parent.yaml").with_options(lumi_tester::adapter::MultiTargetRunOptions {
             command_index: Some(1),
             repeat: 2,
             continue_on_failure: true,
             ..Default::default()
-        },
-    );
+        });
 
     let report = runner.run().unwrap();
 
@@ -307,12 +582,11 @@ fn command_index_and_repeat_options_route_only_selected_root_flow() {
 
 #[test]
 fn missing_command_filter_is_rejected() {
-    let mut runner = fixture_runner("parent.yaml").with_options(
-        lumi_tester::adapter::MultiTargetRunOptions {
+    let mut runner =
+        fixture_runner("parent.yaml").with_options(lumi_tester::adapter::MultiTargetRunOptions {
             command_name: Some("does-not-exist".into()),
             ..Default::default()
-        },
-    );
+        });
 
     let error = runner.run().unwrap_err();
     assert!(error.to_string().contains("was not found"));
@@ -376,8 +650,11 @@ fn runflow_when_false_skips_target_dispatch() {
     )
     .unwrap();
     let mut normalized = normalize_flow(flow, source).unwrap();
-    normalized.components.get_mut(&TargetId::Cloud).unwrap().profile =
-        Some(fixture_dir().join("profiles").join("cloud.yaml"));
+    normalized
+        .components
+        .get_mut(&TargetId::Cloud)
+        .unwrap()
+        .profile = Some(fixture_dir().join("profiles").join("cloud.yaml"));
     let mut runner = MultiTargetRunner::mock_harness(normalized).unwrap();
 
     let report = runner.run().unwrap();
@@ -546,7 +823,10 @@ fn multi_target_artifacts_keep_legacy_report_reader_shape_additively() {
         serde_json::from_value(value.clone()).unwrap();
 
     assert_eq!(parsed.session_id, report.session_id);
-    assert_eq!(parsed.summary.total_commands, report.operations.len() as u32);
+    assert_eq!(
+        parsed.summary.total_commands,
+        report.operations.len() as u32
+    );
     assert_eq!(value["status"], "passed");
     assert!(value["operations"].is_array());
     assert!(value["flows"].is_array());
@@ -627,6 +907,430 @@ fn fixture_dir() -> std::path::PathBuf {
         .join("tests")
         .join("fixtures")
         .join("multi_target")
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum StatefulCall {
+    Lifecycle(&'static str),
+    Execute {
+        command: HcCommand,
+        scope: HcExecutionScope,
+    },
+}
+
+fn write_stateful_flow(
+    dir: &Path,
+    file_name: &str,
+    profile: &str,
+    commands: &str,
+) -> std::path::PathBuf {
+    let source = dir.join(file_name);
+    fs::write(
+        &source,
+        format!("platform: lumi_hc\nprofile: profiles/{profile}\n---\n{commands}"),
+    )
+    .unwrap();
+    source
+}
+
+fn run_stateful_flow(
+    source: &Path,
+) -> (
+    lumi_tester::adapter::MultiTargetRunReport,
+    Arc<Mutex<Vec<StatefulCall>>>,
+) {
+    let flow = lumi_tester::parser::yaml::parse_test_file(source).unwrap();
+    let normalized = normalize_flow(flow, source).unwrap();
+    validate_flow_graph(&normalized).unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let registry = AdapterRegistry::with_hc_backend_registry(stateful_registry(calls.clone()));
+    let mut runner =
+        MultiTargetRunner::standard_with_adapter_registry(normalized, registry).unwrap();
+    (runner.run().unwrap(), calls)
+}
+
+fn stateful_registry(calls: Arc<Mutex<Vec<StatefulCall>>>) -> HcBackendRegistry {
+    let mut registry = HcBackendRegistry::empty();
+    registry
+        .register(
+            HcBackendDescriptor::new("fake-state-a", "fake-pack-a", "1.0", "1.0"),
+            {
+                let calls = calls.clone();
+                move |config| Box::new(StatefulHcBackend::new(config, calls.clone()))
+            },
+        )
+        .unwrap();
+    registry
+        .register(
+            HcBackendDescriptor::new("fake-state-b", "fake-pack-b", "2.0", "2.0"),
+            move |config| Box::new(StatefulHcBackend::new(config, calls.clone())),
+        )
+        .unwrap();
+    registry
+}
+
+fn execute_calls(calls: &Arc<Mutex<Vec<StatefulCall>>>) -> Vec<(HcCommand, HcExecutionScope)> {
+    calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|call| match call {
+            StatefulCall::Execute { command, scope } => Some((command.clone(), scope.clone())),
+            StatefulCall::Lifecycle(_) => None,
+        })
+        .collect()
+}
+
+fn lifecycle_calls(calls: &Arc<Mutex<Vec<StatefulCall>>>) -> Vec<String> {
+    calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|call| match call {
+            StatefulCall::Lifecycle(name) => Some((*name).to_string()),
+            StatefulCall::Execute { .. } => None,
+        })
+        .collect()
+}
+
+fn hc_result_contract(result: &AdapterResult) -> Value {
+    let raw = result.raw_evidence.as_ref().unwrap();
+    json!({
+        "status": result.status,
+        "category": result.category,
+        "message": result.message,
+        "evidenceTier": result.evidence_tier,
+        "action": raw["action"],
+        "readback": raw["readback"],
+        "assertion": raw["assertion"],
+        "normalized": result.normalized_evidence,
+    })
+}
+
+fn assert_stateful_artifacts(
+    output: &Path,
+    implementation: &str,
+    protocol_pack: &str,
+    protocol_version: &str,
+    pack_version: &str,
+) {
+    for file_name in ["run.json", "test-results.json"] {
+        let artifact: Value =
+            serde_json::from_str(&fs::read_to_string(output.join(file_name)).unwrap()).unwrap();
+        let operations = artifact["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 5);
+        for operation in operations {
+            let result = &operation["result"];
+            assert_eq!(result["status"], "passed");
+            assert_eq!(result["adapter"], "lumi_hc");
+            assert!(!result["category"].as_str().unwrap().is_empty());
+            assert!(!result["message"].as_str().unwrap().is_empty());
+            assert_eq!(result["evidenceTier"], "mock_conformance");
+            let raw = &result["rawEvidence"];
+            assert_eq!(raw["backend"]["implementation"], implementation);
+            assert_eq!(raw["backend"]["protocolPack"], protocol_pack);
+            assert_eq!(raw["backend"]["protocolVersion"], protocol_version);
+            assert_eq!(raw["backend"]["packVersion"], pack_version);
+            assert!(raw.get("action").is_some());
+            assert!(raw.get("readback").is_some());
+            assert!(raw.get("assertion").is_some());
+            let evidence = raw["evidence"].as_array().unwrap();
+            assert!(!evidence.is_empty());
+            assert_eq!(evidence[0]["kind"], "fake_transport");
+            assert_eq!(evidence[0]["implementation"], implementation);
+            assert!(evidence[0]["command"].is_string());
+            assert!(result.get("normalizedEvidence").is_some());
+        }
+    }
+}
+
+fn state_updates_json(updates: &[HcStateUpdate]) -> Value {
+    Value::Array(
+        updates
+            .iter()
+            .map(|update| match update {
+                HcStateUpdate::Indexed { idx, value } => {
+                    json!({"idx": idx, "value": value})
+                }
+                HcStateUpdate::Capability { name, value } => {
+                    json!({"name": name, "value": value})
+                }
+            })
+            .collect(),
+    )
+}
+
+struct StatefulHcBackend {
+    config: HcBackendConfig,
+    calls: Arc<Mutex<Vec<StatefulCall>>>,
+    entities: Vec<HcEntity>,
+    states: BTreeMap<String, Vec<HcStateUpdate>>,
+    capabilities: Vec<HcCapability>,
+}
+
+impl StatefulHcBackend {
+    fn new(config: &HcBackendConfig, calls: Arc<Mutex<Vec<StatefulCall>>>) -> Self {
+        let entity = HcEntity {
+            id: "123".into(),
+            name: Some("Fake light".into()),
+            capabilities: vec![HcCapability::new("power", json!(true))],
+        };
+        Self {
+            config: config.clone(),
+            calls,
+            entities: vec![entity],
+            states: BTreeMap::from([(
+                "123".into(),
+                vec![HcStateUpdate::Indexed {
+                    idx: 0,
+                    value: json!(false),
+                }],
+            )]),
+            capabilities: vec![HcCapability::new("health", json!(true))],
+        }
+    }
+
+    fn record(&self, call: StatefulCall) {
+        self.calls.lock().unwrap().push(call);
+    }
+
+    fn evidence(&self, command: &HcCommand) -> HcEvidence {
+        HcEvidence::raw(
+            "fake_transport",
+            json!({
+                "implementation": self.config.implementation,
+                "command": command.display_name(),
+            }),
+        )
+    }
+
+    fn result(&self, command: &HcCommand, result: HcBackendResult) -> HcBackendResult {
+        result
+            .with_evidence_tier(HcEvidenceTier::MockConformance)
+            .with_evidence(self.evidence(command))
+    }
+}
+
+impl HcProtocolBackend for StatefulHcBackend {
+    fn implementation_id(&self) -> &str {
+        &self.config.implementation
+    }
+
+    fn protocol_pack(&self) -> &str {
+        &self.config.protocol_pack
+    }
+
+    fn capabilities(&self) -> &[HcCapability] {
+        &self.capabilities
+    }
+
+    fn preflight(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.record(StatefulCall::Lifecycle("preflight"));
+        HcBackendResult::passed("fake preflight")
+    }
+
+    fn open(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.record(StatefulCall::Lifecycle("open"));
+        HcBackendResult::passed("fake open")
+    }
+
+    fn execute(&mut self, command: &HcCommand, scope: &HcExecutionScope) -> HcBackendResult {
+        self.record(StatefulCall::Execute {
+            command: command.clone(),
+            scope: scope.clone(),
+        });
+        match command {
+            HcCommand::Health => self.result(
+                command,
+                HcBackendResult::passed("fake health").with_normalized(json!({"healthy": true})),
+            ),
+            HcCommand::GetEntities => self.result(
+                command,
+                HcBackendResult::passed("fake discovery")
+                    .with_observation(HcObservation::discovery(self.entities.clone()))
+                    .with_normalized(json!({"entities": self.entities})),
+            ),
+            HcCommand::GetState { entity } => {
+                let state = self.states.get(entity).cloned().unwrap_or_default();
+                let readback = json!({"entity": entity, "state": state_updates_json(&state)});
+                self.result(
+                    command,
+                    HcBackendResult::passed("fake state")
+                        .with_readback(readback.clone())
+                        .with_observation(HcObservation {
+                            entities: None,
+                            entity: None,
+                            state: Some(HcState {
+                                entity: entity.clone(),
+                                updates: self.states.get(entity).cloned().unwrap_or_default(),
+                            }),
+                            value: None,
+                        })
+                        .with_normalized(readback),
+                )
+            }
+            HcCommand::Control { entity, updates } => {
+                self.states.insert(entity.clone(), updates.clone());
+                let updates_json = state_updates_json(updates);
+                let readback = json!({"entity": entity, "state": updates_json.clone()});
+                self.result(
+                    command,
+                    HcBackendResult::passed("fake control")
+                        .with_action(json!({"entity": entity, "updates": updates_json}))
+                        .with_readback(readback.clone())
+                        .with_assertion(json!({"readbackMatches": true}))
+                        .with_normalized(readback)
+                        .with_readback_match(true),
+                )
+            }
+            HcCommand::WaitState { entity, expected } => {
+                let actual = self.states.get(entity).cloned().unwrap_or_default();
+                let matched = actual == *expected;
+                let readback = json!({"entity": entity, "state": state_updates_json(&actual)});
+                let expected_json = state_updates_json(expected);
+                let result = if matched {
+                    HcBackendResult::passed("fake wait")
+                } else {
+                    HcBackendResult::failed("readback_mismatch", "fake state did not match")
+                };
+                self.result(
+                    command,
+                    result
+                        .with_action(json!({"entity": entity, "expected": expected_json}))
+                        .with_readback(readback.clone())
+                        .with_assertion(json!({"readbackMatches": matched}))
+                        .with_normalized(readback)
+                        .with_readback_match(matched),
+                )
+            }
+            _ => self.result(command, HcBackendResult::passed("fake realtime")),
+        }
+    }
+
+    fn close(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.record(StatefulCall::Lifecycle("close"));
+        HcBackendResult::passed("fake close")
+    }
+}
+
+struct ContractHcBackend {
+    config: HcBackendConfig,
+    calls: Arc<Mutex<Vec<String>>>,
+    capabilities: Vec<HcCapability>,
+}
+
+impl ContractHcBackend {
+    fn new(config: &HcBackendConfig, calls: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            config: config.clone(),
+            calls,
+            capabilities: vec![HcCapability::new("health", json!(true))],
+        }
+    }
+
+    fn record(&self, call: String) {
+        self.calls.lock().unwrap().push(call);
+    }
+}
+
+impl HcProtocolBackend for ContractHcBackend {
+    fn implementation_id(&self) -> &str {
+        &self.config.implementation
+    }
+
+    fn protocol_pack(&self) -> &str {
+        &self.config.protocol_pack
+    }
+
+    fn capabilities(&self) -> &[HcCapability] {
+        &self.capabilities
+    }
+
+    fn preflight(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.record("lifecycle:preflight".into());
+        HcBackendResult::passed("fake preflight")
+            .with_evidence_tier(HcEvidenceTier::MockConformance)
+    }
+
+    fn open(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.record("lifecycle:open".into());
+        HcBackendResult::passed("fake open").with_evidence_tier(HcEvidenceTier::MockConformance)
+    }
+
+    fn execute(&mut self, command: &HcCommand, scope: &HcExecutionScope) -> HcBackendResult {
+        let entity = match command {
+            HcCommand::GetState { entity } => entity.as_str(),
+            _ => "none",
+        };
+        self.record(format!(
+            "execute:{}:{}:{}",
+            command.display_name(),
+            entity,
+            scope.correlation_id()
+        ));
+        HcBackendResult::passed("fake execute")
+            .with_evidence_tier(HcEvidenceTier::MockConformance)
+            .with_evidence(HcEvidence::raw(
+                "fake",
+                json!({"command": command.display_name(), "entity": entity}),
+            ))
+            .with_normalized(json!({
+                "command": command.display_name(),
+                "entity": entity,
+                "correlationId": scope.correlation_id()
+            }))
+    }
+
+    fn close(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.record("lifecycle:close".into());
+        HcBackendResult::passed("fake close")
+    }
+}
+
+struct CloseResultHcBackend {
+    config: HcBackendConfig,
+    close_result: HcBackendResult,
+    capabilities: Vec<HcCapability>,
+}
+
+impl CloseResultHcBackend {
+    fn new(config: &HcBackendConfig, close_result: HcBackendResult) -> Self {
+        Self {
+            config: config.clone(),
+            close_result,
+            capabilities: vec![HcCapability::new("health", json!(true))],
+        }
+    }
+}
+
+impl HcProtocolBackend for CloseResultHcBackend {
+    fn implementation_id(&self) -> &str {
+        &self.config.implementation
+    }
+
+    fn protocol_pack(&self) -> &str {
+        &self.config.protocol_pack
+    }
+
+    fn capabilities(&self) -> &[HcCapability] {
+        &self.capabilities
+    }
+
+    fn preflight(&mut self, _context: &TestContext) -> HcBackendResult {
+        HcBackendResult::passed("fake preflight")
+    }
+
+    fn open(&mut self, _context: &TestContext) -> HcBackendResult {
+        HcBackendResult::passed("fake open")
+    }
+
+    fn execute(&mut self, _command: &HcCommand, _scope: &HcExecutionScope) -> HcBackendResult {
+        HcBackendResult::passed("fake execute")
+    }
+
+    fn close(&mut self, _context: &TestContext) -> HcBackendResult {
+        self.close_result.clone()
+    }
 }
 
 struct RecordingAdapter {

@@ -389,8 +389,8 @@ impl WsTransport for MockWebSocketTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::e2e::canonical::EntityRef;
-    use crate::e2e::http::default_evidence;
+    use crate::hc::backends::v3::runtime::canonical::EntityRef;
+    use crate::hc::backends::v3::runtime::http::default_evidence;
 
     fn entity() -> EntityRef {
         EntityRef {

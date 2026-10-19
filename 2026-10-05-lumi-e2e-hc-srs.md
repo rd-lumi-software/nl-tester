@@ -68,8 +68,8 @@ result và evidence vẫn là yêu cầu bắt buộc.
 ### 4.1 Canonical multi-target YAML amendment (2026-10-18)
 
 Canonical YAML may declare peer `app`, `gateway`, and `cloud` components. Legacy
-`platform`/`appId` normalizes to App; legacy `platform: lumi_e2e` plus `profile`
-normalizes to `gateway`/`lumi_hc`. `journey` is deprecated migration metadata
+`platform`/`appId` normalizes to App. The public HC platform is `lumi_hc`;
+unsupported old HC aliases are rejected. `journey` is deprecated migration metadata
 only and never selects an adapter.
 
 `runFlow.target` accepts `app`, `gateway`, or `cloud`. It may be omitted only for
@@ -212,7 +212,7 @@ Mỗi adapter nên cung cấp các operation khái niệm:
 
 ### 6.1 Nền tảng E2E
 
-- **FR-E2E-001**: Parser chấp nhận `platform: lumi_e2e`.
+- **FR-E2E-001**: Parser chấp nhận `platform: lumi_hc`; các alias HC cũ bị từ chối.
 - **FR-E2E-002**: Header có thể giữ `journey` để tương thích, nhưng field này là
   deprecated metadata và không chọn adapter; target được chọn từ component model
   và `runFlow.target`.
@@ -316,7 +316,7 @@ Mỗi adapter nên cung cấp các operation khái niệm:
 ### 7.1 Header
 
 ```yaml
-platform: lumi_e2e
+platform: lumi_hc
 journey: user_journey
 profile: profiles/lumi-iot-v3-home-controller.yaml
 defaultTimeout: 15000
@@ -404,7 +404,7 @@ schedule.
 ### 7.4 Ví dụ user journey
 
 ```yaml
-platform: lumi_e2e
+platform: lumi_hc
 journey: user_journey
 profile: profiles/lumi-iot-v3-home-controller.yaml
 defaultTimeout: 15000
@@ -428,7 +428,7 @@ còn HC state readback là evidence chính cho behavior của HC.
 ### 7.5 Ví dụ system journey Phase 1
 
 ```yaml
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: profiles/lumi-iot-v3-home-controller.yaml
 defaultTimeout: 15000
@@ -851,8 +851,8 @@ tế của implementation đó.
 Implementation được nghiệm thu khi:
 
 1. App-only YAML hiện có vẫn chạy.
-2. Flow `platform: lumi_e2e` validate và list được.
-3. Legacy HC YAML và canonical gateway YAML được validate/list đúng; môi trường
+2. Flow `platform: lumi_hc` validate và list được; platform HC cũ bị từ chối.
+3. Canonical gateway YAML được validate/list đúng; môi trường
    HC thật thiếu phải trả `blocked`, không được báo `passed`.
 4. Một parent flow có thể route App, gateway và Cloud qua `runFlow.target` trong
    cùng shared session; child header không đổi driver.
@@ -873,7 +873,7 @@ Implementation được nghiệm thu khi:
 ## 18. Thứ tự triển khai sau khi SRS được duyệt
 
 1. Thêm parser/header/schema cho component declarations, target và profile; giữ
-   `lumi_e2e`/`journey` như legacy compatibility.
+   `journey` chỉ như metadata deprecated.
 2. Tạo multi-adapter E2E session, giữ nguyên App executor và cho App optional.
 3. Thêm profile loading, capability matrix, preflight và result category.
 4. Thêm HTTP/JSON adapter cho health, device, bridge, group và scene.
@@ -920,8 +920,8 @@ This section is normative where earlier draft wording conflicts with the current
 implementation scope:
 
 - `app`, `gateway`, and `cloud` are peer components. Legacy `platform`/`appId`
-  still normalize to `app`; legacy `platform: lumi_e2e` still normalizes to the
-  HC gateway for compatibility.
+  still normalize to `app`; `platform: lumi_hc` selects the HC gateway and old
+  HC aliases are rejected.
 - `journey` is optional deprecated metadata. It never selects an adapter,
   changes a target, or makes a field mandatory. Routing is determined only by
   normalized components and explicit `runFlow.target` when the root has more

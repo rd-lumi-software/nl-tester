@@ -22,10 +22,9 @@
         "web",
         "macos",
         "macOS",
-        "windows"
-        ,"lumi_e2e"
-        ,"lumi_hc"
-        ,"lumi_cloud"
+        "windows",
+        "lumi_hc",
+        "lumi_cloud"
       ]
     },
     "app": {

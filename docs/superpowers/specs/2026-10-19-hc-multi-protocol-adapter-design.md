@@ -13,7 +13,7 @@ The multi-target layer already exposes TargetId::Gateway and the public platform
 The following public behavior must remain stable:
 
 - canonical gateway YAML with platform: lumi_hc;
-- legacy platform: lumi_e2e normalization;
+- previous HC platform aliases are rejected;
 - hcHealth, hcGetEntities, hcGetState, hcControl, and hcWaitState;
 - current indexed state syntax: state: [{idx, value}];
 - v3 HTTP/WebSocket routes, bounded retry behavior, readback, evidence, and report fields;
@@ -54,11 +54,16 @@ Define an internal HcProtocolBackend trait. It owns protocol-specific connection
         fn capabilities(&self) -> &[HcCapability];
         fn preflight(&mut self, context: &TestContext) -> HcBackendResult;
         fn open(&mut self, context: &TestContext) -> HcBackendResult;
-        fn execute(&mut self, command: &HcCommand, scope: &TargetScope) -> HcBackendResult;
+        fn execute(&mut self, command: &HcCommand, scope: &HcExecutionScope) -> HcBackendResult;
         fn close(&mut self, context: &TestContext) -> HcBackendResult;
     }
 
-HcGatewayAdapter remains the TargetAdapter implementation. It translates parsed TestCommand::E2e values to HcCommand, delegates lifecycle and execution to the selected backend, and converts HcBackendResult to AdapterResult. The runner does not learn about v3, HCG1, HTTP, MQTT, or WebSocket.
+HcGatewayAdapter remains the TargetAdapter implementation. It translates parsed
+`TestCommand::V3` values to `HcCommand`, converts the runner scope to
+`HcExecutionScope`, delegates lifecycle and execution to the selected backend,
+and converts `HcBackendResult` to `AdapterResult`. The HC domain does not
+depend on `TargetScope` or any adapter module. The runner does not learn about
+v3, HCG1, HTTP, MQTT, or WebSocket.
 
 ### Profile and backend selection
 
@@ -90,7 +95,10 @@ An in-memory fake backend is registered only in test code. An unknown implementa
 
 ### Compatibility policy
 
-No breaking YAML migration is required. Existing v3 flows continue to use platform: lumi_hc, the same profile reference, and the same command names. platform: lumi_e2e remains a compatibility alias. The new domain model is an internal boundary first; semantic capability YAML is enabled only when a backend and schema contract support it.
+No breaking YAML migration is required for existing v3 flows: they continue to
+use `platform: lumi_hc`, the same profile reference, and the same command
+names. The new domain model is an internal boundary first; semantic capability
+YAML is enabled only when a backend and schema contract support it.
 
 The v3 backend remains responsible for:
 
@@ -108,7 +116,7 @@ The v3 backend remains responsible for:
 2. Backend contract tests run the same command sequence against a fake backend and assert lifecycle, capability rejection, readback, and evidence behavior.
 3. Existing v3 HTTP/WebSocket contract tests remain and run behind V3HcProtocolBackend without changing their wire assertions.
 4. Registry tests verify profile identity selects v3, unknown identity is rejected, and a fake backend can be injected without parser or runner changes.
-5. Existing parser, multi-target, report, and legacy compatibility tests remain green.
+5. Existing parser, multi-target, report, and unsupported-platform tests remain green.
 6. Documentation gives a future adapter author the exact files, trait methods, profile entry point, and required contract tests, but does not claim HCG1 support.
 
 ## Completion criteria
@@ -123,4 +131,3 @@ The refactor is complete when:
 - reports and evidence retain existing adapter/status/evidence fields;
 - the architecture and future adapter procedure are documented;
 - no HCG1 production transport code is added in this phase.
-

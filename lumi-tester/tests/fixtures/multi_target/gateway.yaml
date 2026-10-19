@@ -1,4 +1,4 @@
-platform: lumi_e2e
+platform: lumi_hc
 profile: profiles/hc.yaml
 journey: system_journey
 ---

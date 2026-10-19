@@ -119,7 +119,7 @@ pub struct TestFlow {
     #[serde(default)]
     pub platform: Option<Platform>,
 
-    /// Semantic journey for non-App domains such as lumi_e2e.
+    /// Semantic journey metadata for non-App domains such as lumi_hc.
     #[serde(default)]
     pub journey: Option<String>,
 
@@ -638,8 +638,6 @@ pub enum Platform {
     #[serde(alias = "macOS")]
     Macos,
     Windows,
-    #[serde(rename = "lumi_e2e")]
-    LumiE2e,
     #[serde(rename = "lumi_hc")]
     LumiHc,
     #[serde(rename = "lumi_cloud")]
@@ -877,8 +875,8 @@ pub struct ExtendedWaitParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TestCommand {
-    /// Home Controller semantic E2E command branch.
-    E2e(crate::e2e::types::E2eCommand),
+    /// Home Controller semantic V3 command branch.
+    V3(crate::hc::backends::v3::runtime::types::V3Command),
 
     // App lifecycle
     #[serde(alias = "open")]
@@ -3087,7 +3085,7 @@ impl TestCommand {
     /// Get a display name for the command
     pub fn display_name(&self) -> String {
         match self {
-            TestCommand::E2e(command) => command.display_name().to_string(),
+            TestCommand::V3(command) => command.display_name().to_string(),
             TestCommand::LaunchApp(p_input) => {
                 let p = p_input.clone().map(|pi| pi.into_inner());
                 if let Some(params) = p {

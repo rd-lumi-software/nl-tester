@@ -25,7 +25,7 @@ enum Commands {
         /// Path to test file or directory
         path: PathBuf,
 
-        /// Target platform (android, android_auto, ios, web, macos, windows, lumi_e2e).
+        /// Target platform (android, android_auto, ios, web, macos, windows, lumi_hc).
         /// Parsed from file if not provided.
         #[arg(short, long)]
         platform: Option<String>,
@@ -722,16 +722,12 @@ async fn async_main() -> anyhow::Result<()> {
             }
             if path.is_file() {
                 let parsed = lumi_tester::parser::yaml::parse_test_file(&path)?;
-                let is_legacy_hc_flow = matches!(
-                    parsed.platform,
-                    Some(lumi_tester::parser::types::Platform::LumiE2e)
-                );
                 let normalized = lumi_tester::parser::normalize::normalize_flow(parsed, &path)?;
                 let has_non_app_target = normalized
                     .components
                     .keys()
                     .any(|target| *target != lumi_tester::parser::types::TargetId::App);
-                if has_non_app_target && !is_legacy_hc_flow {
+                if has_non_app_target {
                     lumi_tester::parser::validation::validate_flow_graph(&normalized)?;
                     let mock_mode = multi_target_mock_mode(&normalized);
                     let attached_driver = if !mock_mode {
@@ -855,14 +851,7 @@ async fn async_main() -> anyhow::Result<()> {
                 println!("  Data File: {}", d.display().to_string().cyan());
             }
 
-            // lumi_e2e uses the existing TestExecutor command loop. The runner's
-            // platform driver is only a host lifecycle adapter for this semantic
-            // domain; E2E I/O is owned by the profile-bound runtime in executor.
-            let runner_platform = if platform_val == "lumi_e2e" {
-                "macos"
-            } else {
-                platform_val.as_str()
-            };
+            let runner_platform = platform_val.as_str();
             runner::run_tests(
                 &path,
                 runner_platform,
@@ -1784,7 +1773,8 @@ struct ListedFlow {
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    required_capabilities: Option<Vec<lumi_tester::e2e::types::E2eCapability>>,
+    required_capabilities:
+        Option<Vec<lumi_tester::hc::backends::v3::runtime::types::V3Capability>>,
     components: std::collections::BTreeMap<
         lumi_tester::parser::types::TargetId,
         lumi_tester::parser::types::ComponentSpec,
@@ -1801,7 +1791,7 @@ struct ListedCommand {
     index: usize,
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    capabilities: Option<Vec<lumi_tester::e2e::types::E2eCapability>>,
+    capabilities: Option<Vec<lumi_tester::hc::backends::v3::runtime::types::V3Capability>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<lumi_tester::parser::types::TargetId>,
 }
@@ -1859,17 +1849,19 @@ fn list_test_files(path: &std::path::Path) -> anyhow::Result<ListReport> {
 }
 
 fn make_validation_error(path: &std::path::Path, error: anyhow::Error) -> ValidationError {
-    let e2e = error.downcast_ref::<lumi_tester::e2e::E2eValidationError>();
+    let v3 = error.downcast_ref::<
+        lumi_tester::hc::backends::v3::runtime::profile::V3ValidationError,
+    >();
     let flow = error.downcast_ref::<lumi_tester::parser::validation::FlowValidationError>();
     let normalization = error.downcast_ref::<lumi_tester::parser::normalize::NormalizationError>();
     ValidationError {
         path: path.display().to_string(),
         error: error.to_string(),
-        code: e2e
+        code: v3
             .map(|error| error.code().to_string())
             .or_else(|| flow.map(|error| error.code().to_string()))
             .or_else(|| normalization.map(|error| error.code().to_string())),
-        field: e2e.and_then(|error| error.field().map(str::to_string)),
+        field: v3.and_then(|error| error.field().map(str::to_string)),
     }
 }
 
@@ -1913,14 +1905,14 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
     // A multi-target parent is validated by the recursive target graph. The
     // HC profile validator applies only to a file that actually contains HC
     // commands; otherwise runFlow itself is a valid orchestration command.
-    let e2e_metadata = if flow
+    let v3_metadata = if flow
         .commands
         .iter()
-        .any(|command| matches!(command, lumi_tester::parser::types::TestCommand::E2e(_)))
+        .any(|command| matches!(command, lumi_tester::parser::types::TestCommand::V3(_)))
     {
-        lumi_tester::e2e::validate_flow(path, &flow)?
+        lumi_tester::hc::backends::v3::runtime::profile::validate_flow(path, &flow)?
     } else {
-        lumi_tester::e2e::E2eFlowMetadata {
+        lumi_tester::hc::backends::v3::runtime::profile::V3FlowMetadata {
             profile_ref: String::new(),
             profile_path: PathBuf::new(),
             required_capabilities: Vec::new(),
@@ -1935,8 +1927,8 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
             index,
             name: command.display_name(),
             capabilities: match command {
-                lumi_tester::parser::types::TestCommand::E2e(e2e_command) => {
-                    Some(e2e_command.required_capabilities())
+                lumi_tester::parser::types::TestCommand::V3(v3_command) => {
+                    Some(v3_command.required_capabilities())
                 }
                 _ => None,
             },
@@ -1958,10 +1950,10 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
         tags: flow.tags,
         journey: flow.journey,
         profile: flow.profile,
-        required_capabilities: if e2e_metadata.required_capabilities.is_empty() {
+        required_capabilities: if v3_metadata.required_capabilities.is_empty() {
             None
         } else {
-            Some(e2e_metadata.required_capabilities)
+            Some(v3_metadata.required_capabilities)
         },
         components: normalized.components,
         diagnostics: normalized.legacy_metadata.diagnostics,

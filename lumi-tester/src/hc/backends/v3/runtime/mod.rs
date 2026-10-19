@@ -7,23 +7,22 @@ pub mod types;
 pub mod websocket;
 
 pub use evidence::{EvidenceBoundaryError, EvidenceRoot, EvidenceWriter};
-pub use profile::{validate_flow, E2eFlowMetadata, E2eValidationError};
-pub use types::{E2eCapability, E2eCommand, E2eCommandRequirement};
+pub use profile::{validate_flow, V3FlowMetadata, V3ValidationError};
+pub use types::{V3Capability, V3Command, V3CommandRequirement};
 
 use anyhow::Result as AnyResult;
 use canonical::{CanonicalEntity, DecimalId, EntityRef};
 use evidence::{EvidenceConfig, EvidenceRecord};
 use http::{HcHttpAdapter, HcHttpError, ReqwestHttpTransport};
-use result::{readback_matches, E2eCategory, E2eResult, E2eStatus, EvidenceTier, RequestedChange};
+use result::{readback_matches, V3Category, V3Result, V3Status, EvidenceTier, RequestedChange};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::time::Duration;
-use types::{E2eExpectParams, E2eStateParams};
+use types::{V3ExpectParams, V3StateParams};
 use websocket::{HcWsAdapter, HcWsError, RealWsTransport};
 
-/// The one runtime boundary used by the existing Lumi runner for
-/// legacy `platform: lumi_e2e` flows. `journey` is metadata only.
-pub struct E2eRuntime {
+/// The V3 HTTP/WebSocket runtime used by the HC backend.
+pub struct V3Runtime {
     http: HcHttpAdapter<ReqwestHttpTransport>,
     websocket: HcWsAdapter<RealWsTransport>,
     entities: Vec<CanonicalEntity>,
@@ -31,16 +30,16 @@ pub struct E2eRuntime {
     sequence: u64,
 }
 
-impl E2eRuntime {
+impl V3Runtime {
     pub fn new(
-        loaded: &profile::LoadedE2eProfile,
+        loaded: &profile::LoadedV3Profile,
         base_url: String,
         websocket_url: String,
         timeout: Duration,
     ) -> AnyResult<Self> {
         if loaded.profile.retry.control_max_attempts != 0 {
             anyhow::bail!(
-                "E2E controlMaxAttempts must be 0 because control POST is non-retried"
+                "V3 HC controlMaxAttempts must be 0 because control POST is non-retried"
             );
         }
         let config = EvidenceConfig {
@@ -71,23 +70,23 @@ impl E2eRuntime {
         })
     }
 
-    pub async fn execute(&mut self, command: &E2eCommand) -> E2eResult {
+    pub async fn execute(&mut self, command: &V3Command) -> V3Result {
         let result = match command {
-            E2eCommand::HcHealth => self.health().await,
-            E2eCommand::HcGetEntities => self.discover().await,
-            E2eCommand::HcGetState(params) => self.get_state(params).await,
-            E2eCommand::HcControl(params) => self.control(params).await,
-            E2eCommand::HcWaitState(params) => self.wait_state(params).await,
-            E2eCommand::WsSubscribe(params) => self.subscribe(params).await,
-            E2eCommand::WsExpect(params) => self.expect(params).await,
-            E2eCommand::WsSnapshot(params) => self.snapshot(params).await,
+            V3Command::HcHealth => self.health().await,
+            V3Command::HcGetEntities => self.discover().await,
+            V3Command::HcGetState(params) => self.get_state(params).await,
+            V3Command::HcControl(params) => self.control(params).await,
+            V3Command::HcWaitState(params) => self.wait_state(params).await,
+            V3Command::WsSubscribe(params) => self.subscribe(params).await,
+            V3Command::WsExpect(params) => self.expect(params).await,
+            V3Command::WsSnapshot(params) => self.snapshot(params).await,
         };
         match result {
             Ok(result) => {
-                if result.status == E2eStatus::Passed {
+                if result.status == V3Status::Passed {
                     if let Err(error) = self.persist(&result) {
-                        return E2eResult::error(
-                            E2eCategory::EvidenceError,
+                        return V3Result::error(
+                            V3Category::EvidenceError,
                             error.to_string(),
                             EvidenceTier::RealE2e,
                         );
@@ -99,18 +98,18 @@ impl E2eRuntime {
         }
     }
 
-    async fn health(&mut self) -> std::result::Result<E2eResult, E2eResult> {
+    async fn health(&mut self) -> std::result::Result<V3Result, V3Result> {
         let response = self.http.health().await.map_err(|error| http_result(error))?;
         let normalized = json!({ "status": response.status });
         if !response.status {
-            return Err(E2eResult::failed(
-                E2eCategory::AssertionMismatch,
+            return Err(V3Result::failed(
+                V3Category::AssertionMismatch,
                 "HC health/readiness returned status=false",
                 EvidenceTier::RealE2e,
             ));
         }
         Ok(self.pass(
-            E2eCategory::Preflight,
+            V3Category::Preflight,
             json!({ "operation": "health" }),
             normalized.clone(),
             json!({ "status": true }),
@@ -119,12 +118,12 @@ impl E2eRuntime {
         ))
     }
 
-    async fn discover(&mut self) -> std::result::Result<E2eResult, E2eResult> {
+    async fn discover(&mut self) -> std::result::Result<V3Result, V3Result> {
         let response = self.http.discover().await.map_err(|error| http_result(error))?;
         self.entities = response.entities.clone();
         let normalized = serde_json::to_value(&response.entities).unwrap_or(Value::Null);
         Ok(self.pass(
-            E2eCategory::Preflight,
+            V3Category::Preflight,
             json!({ "operation": "device_discovery" }),
             normalized.clone(),
             json!({ "entitiesFound": response.entities.len() }),
@@ -133,12 +132,12 @@ impl E2eRuntime {
         ))
     }
 
-    async fn get_state(&mut self, params: &types::E2eEntityParams) -> std::result::Result<E2eResult, E2eResult> {
+    async fn get_state(&mut self, params: &types::V3EntityParams) -> std::result::Result<V3Result, V3Result> {
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
         let response = self.http.state(&id).await.map_err(|error| http_result(error))?;
         let normalized = serde_json::to_value(&response.states).unwrap_or(Value::Null);
         Ok(self.pass(
-            E2eCategory::Preflight,
+            V3Category::Preflight,
             json!({ "operation": "state_read", "entity": params.entity }),
             normalized.clone(),
             json!({ "stateRead": true }),
@@ -147,7 +146,7 @@ impl E2eRuntime {
         ))
     }
 
-    async fn control(&mut self, params: &E2eStateParams) -> std::result::Result<E2eResult, E2eResult> {
+    async fn control(&mut self, params: &V3StateParams) -> std::result::Result<V3Result, V3Result> {
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
         let changes = params
             .state
@@ -156,10 +155,10 @@ impl E2eRuntime {
                 Ok(http::ControlChange {
                     idx: value.idx,
                     value: serde_json::to_value(&value.value)
-                        .map_err(|error| E2eResult::error(E2eCategory::InvalidPayload, error.to_string(), EvidenceTier::RealE2e))?,
+                        .map_err(|error| V3Result::error(V3Category::InvalidPayload, error.to_string(), EvidenceTier::RealE2e))?,
                 })
             })
-            .collect::<std::result::Result<Vec<_>, E2eResult>>()?;
+            .collect::<std::result::Result<Vec<_>, V3Result>>()?;
         let response = self
             .http
             .control(&id, &changes)
@@ -172,7 +171,7 @@ impl E2eRuntime {
             "changes": changes.iter().map(|change| json!({ "idx": change.idx, "value": change.value })).collect::<Vec<_>>(),
         });
         Ok(self.pass(
-            E2eCategory::ControlDispatch,
+            V3Category::ControlDispatch,
             action,
             normalized.clone(),
             json!({ "readbackMatches": response.assertion }),
@@ -181,7 +180,7 @@ impl E2eRuntime {
         ))
     }
 
-    async fn wait_state(&mut self, params: &E2eStateParams) -> std::result::Result<E2eResult, E2eResult> {
+    async fn wait_state(&mut self, params: &V3StateParams) -> std::result::Result<V3Result, V3Result> {
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
         let requested = requested_changes(params).map_err(|error| invalid_result(error))?;
         for _ in 0..3 {
@@ -189,7 +188,7 @@ impl E2eRuntime {
             let normalized = serde_json::to_value(&response.states).unwrap_or(Value::Null);
             if readback_matches(&entity_for(&id), &requested, &response.states) {
                 return Ok(self.pass(
-                    E2eCategory::AssertionMismatch,
+                    V3Category::AssertionMismatch,
                     json!({ "operation": "wait_state", "entity": params.entity }),
                     normalized.clone(),
                     json!({ "readbackMatches": true }),
@@ -198,21 +197,21 @@ impl E2eRuntime {
                 ));
             }
         }
-        Err(E2eResult::failed(
-            E2eCategory::AssertionMismatch,
+        Err(V3Result::failed(
+            V3Category::AssertionMismatch,
             "bounded state readback did not match requested state",
             EvidenceTier::RealE2e,
         ))
     }
 
-    async fn subscribe(&mut self, params: &types::E2eSubscribeParams) -> std::result::Result<E2eResult, E2eResult> {
+    async fn subscribe(&mut self, params: &types::V3SubscribeParams) -> std::result::Result<V3Result, V3Result> {
         self.websocket
             .subscribe(&params.channels)
             .await
             .map_err(ws_result)?;
         let normalized = json!({ "channels": params.channels });
         Ok(self.pass(
-            E2eCategory::Preflight,
+            V3Category::Preflight,
             json!({ "operation": "subscribe", "channels": params.channels }),
             normalized.clone(),
             json!({ "acknowledged": true }),
@@ -221,7 +220,7 @@ impl E2eRuntime {
         ))
     }
 
-    async fn expect(&mut self, params: &E2eExpectParams) -> std::result::Result<E2eResult, E2eResult> {
+    async fn expect(&mut self, params: &V3ExpectParams) -> std::result::Result<V3Result, V3Result> {
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
         let requested = requested_changes_from_event(&params.event).map_err(|error| invalid_result(error))?;
         let response = self
@@ -231,7 +230,7 @@ impl E2eRuntime {
             .map_err(ws_result)?;
         let normalized = serde_json::to_value(&response.states).unwrap_or(Value::Null);
         Ok(self.pass(
-            E2eCategory::AssertionMismatch,
+            V3Category::AssertionMismatch,
             json!({ "operation": "expect_state", "entity": params.entity, "event": params.event }),
             normalized.clone(),
             json!({ "readbackMatches": true }),
@@ -240,7 +239,7 @@ impl E2eRuntime {
         ))
     }
 
-    async fn snapshot(&mut self, params: &types::E2eEntityParams) -> std::result::Result<E2eResult, E2eResult> {
+    async fn snapshot(&mut self, params: &types::V3EntityParams) -> std::result::Result<V3Result, V3Result> {
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
         let response = self
             .websocket
@@ -249,7 +248,7 @@ impl E2eRuntime {
             .map_err(ws_result)?;
         let normalized = serde_json::to_value(&response.states).unwrap_or(Value::Null);
         Ok(self.pass(
-            E2eCategory::ReconnectFallback,
+            V3Category::ReconnectFallback,
             json!({ "operation": "snapshot", "entity": params.entity }),
             normalized.clone(),
             json!({ "snapshotRead": true }),
@@ -260,14 +259,14 @@ impl E2eRuntime {
 
     fn pass(
         &self,
-        category: E2eCategory,
+        category: V3Category,
         action: Value,
         readback: Value,
         assertion: Value,
         evidence: Vec<EvidenceRecord>,
         normalized: Value,
-    ) -> E2eResult {
-        E2eResult::passed(
+    ) -> V3Result {
+        V3Result::passed(
             category,
             EvidenceTier::RealE2e,
             action,
@@ -278,7 +277,7 @@ impl E2eRuntime {
         )
     }
 
-    fn persist(&mut self, result: &E2eResult) -> AnyResult<()> {
+    fn persist(&mut self, result: &V3Result) -> AnyResult<()> {
         self.sequence += 1;
         let stem = format!("e2e-{:04}", self.sequence);
         let raw = serde_json::to_vec_pretty(&result.evidence)?;
@@ -312,7 +311,7 @@ fn entity_for(id: &DecimalId) -> EntityRef {
     }
 }
 
-fn requested_changes(params: &E2eStateParams) -> AnyResult<Vec<RequestedChange>> {
+fn requested_changes(params: &V3StateParams) -> AnyResult<Vec<RequestedChange>> {
     params
         .state
         .iter()
@@ -329,17 +328,17 @@ fn requested_changes_from_event(event: &serde_yaml::Value) -> AnyResult<Vec<Requ
     let state = event
         .get("state")
         .and_then(serde_yaml::Value::as_sequence)
-        .ok_or_else(|| anyhow::anyhow!("E2E wsExpect event requires state"))?;
+        .ok_or_else(|| anyhow::anyhow!("V3 HC wsExpect event requires state"))?;
     state
         .iter()
         .map(|item| {
             let idx = item
                 .get("idx")
                 .and_then(serde_yaml::Value::as_u64)
-                .ok_or_else(|| anyhow::anyhow!("E2E wsExpect state requires idx"))?;
+                .ok_or_else(|| anyhow::anyhow!("V3 HC wsExpect state requires idx"))?;
             let value = item
                 .get("value")
-                .ok_or_else(|| anyhow::anyhow!("E2E wsExpect state requires value"))?;
+                .ok_or_else(|| anyhow::anyhow!("V3 HC wsExpect state requires value"))?;
             Ok(RequestedChange {
                 idx,
                 expected: serde_json::to_value(value)?,
@@ -348,28 +347,28 @@ fn requested_changes_from_event(event: &serde_yaml::Value) -> AnyResult<Vec<Requ
         .collect()
 }
 
-fn invalid_result(error: anyhow::Error) -> E2eResult {
-    E2eResult::error(E2eCategory::InvalidPayload, error.to_string(), EvidenceTier::RealE2e)
+fn invalid_result(error: anyhow::Error) -> V3Result {
+    V3Result::error(V3Category::InvalidPayload, error.to_string(), EvidenceTier::RealE2e)
 }
 
-fn http_result(error: HcHttpError) -> E2eResult {
+fn http_result(error: HcHttpError) -> V3Result {
     match error {
-        HcHttpError::Blocked(message) => E2eResult::blocked(E2eCategory::ControlDispatch, message),
-        HcHttpError::ReadbackMismatch { .. } => E2eResult::failed(E2eCategory::AssertionMismatch, error.to_string(), EvidenceTier::RealE2e),
-        HcHttpError::Timeout => E2eResult::error(E2eCategory::Timeout, error.to_string(), EvidenceTier::RealE2e),
-        HcHttpError::InvalidPayload(message) => E2eResult::error(E2eCategory::InvalidPayload, message, EvidenceTier::RealE2e),
-        HcHttpError::Evidence(message) => E2eResult::error(E2eCategory::EvidenceError, message, EvidenceTier::RealE2e),
-        other => E2eResult::error(E2eCategory::HttpError, other.to_string(), EvidenceTier::RealE2e),
+        HcHttpError::Blocked(message) => V3Result::blocked(V3Category::ControlDispatch, message),
+        HcHttpError::ReadbackMismatch { .. } => V3Result::failed(V3Category::AssertionMismatch, error.to_string(), EvidenceTier::RealE2e),
+        HcHttpError::Timeout => V3Result::error(V3Category::Timeout, error.to_string(), EvidenceTier::RealE2e),
+        HcHttpError::InvalidPayload(message) => V3Result::error(V3Category::InvalidPayload, message, EvidenceTier::RealE2e),
+        HcHttpError::Evidence(message) => V3Result::error(V3Category::EvidenceError, message, EvidenceTier::RealE2e),
+        other => V3Result::error(V3Category::HttpError, other.to_string(), EvidenceTier::RealE2e),
     }
 }
 
-fn ws_result(error: HcWsError) -> E2eResult {
+fn ws_result(error: HcWsError) -> V3Result {
     match error {
-        HcWsError::Timeout => E2eResult::error(E2eCategory::Timeout, error.to_string(), EvidenceTier::RealE2e),
-        HcWsError::Evidence(message) => E2eResult::error(E2eCategory::EvidenceError, message, EvidenceTier::RealE2e),
-        HcWsError::Closed => E2eResult::error(E2eCategory::WebsocketClosed, error.to_string(), EvidenceTier::RealE2e),
-        HcWsError::Malformed(message) => E2eResult::error(E2eCategory::ProtocolError, message, EvidenceTier::RealE2e),
-        HcWsError::ReconnectExhausted => E2eResult::blocked(E2eCategory::NotConnected, error.to_string()),
-        HcWsError::Transport(message) => E2eResult::error(E2eCategory::HttpError, message, EvidenceTier::RealE2e),
+        HcWsError::Timeout => V3Result::error(V3Category::Timeout, error.to_string(), EvidenceTier::RealE2e),
+        HcWsError::Evidence(message) => V3Result::error(V3Category::EvidenceError, message, EvidenceTier::RealE2e),
+        HcWsError::Closed => V3Result::error(V3Category::WebsocketClosed, error.to_string(), EvidenceTier::RealE2e),
+        HcWsError::Malformed(message) => V3Result::error(V3Category::ProtocolError, message, EvidenceTier::RealE2e),
+        HcWsError::ReconnectExhausted => V3Result::blocked(V3Category::NotConnected, error.to_string()),
+        HcWsError::Transport(message) => V3Result::error(V3Category::HttpError, message, EvidenceTier::RealE2e),
     }
 }

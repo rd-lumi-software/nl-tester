@@ -1,7 +1,7 @@
-use lumi_tester::e2e::profile::{
-    load_profile, validate_flow, E2eValidationError, EvidenceBoundaryError,
+use lumi_tester::hc::backends::v3::runtime::profile::{
+    load_profile, validate_flow, V3ValidationError, EvidenceBoundaryError,
 };
-use lumi_tester::e2e::types::{E2eCapability, E2eCommand};
+use lumi_tester::hc::backends::v3::runtime::types::{V3Capability, V3Command};
 use lumi_tester::parser::types::{Platform, TestCommand};
 use lumi_tester::parser::yaml::parse_yaml_content;
 use std::fs;
@@ -43,7 +43,7 @@ retry:
 fn valid_flow(profile: &str) -> String {
     format!(
         r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: {profile}
 defaultTimeout: 15000
@@ -144,7 +144,7 @@ fn junction_privilege_failure_is_not_silent() {
 }
 
 #[test]
-fn parses_valid_lumi_e2e_flow_with_stable_commands_and_requirements() {
+fn parses_valid_lumi_hc_flow_with_stable_commands_and_requirements() {
     let dir = temp_flow_dir("valid");
     let profile_path = dir.join("profiles");
     fs::create_dir_all(&profile_path).unwrap();
@@ -153,7 +153,7 @@ fn parses_valid_lumi_e2e_flow_with_stable_commands_and_requirements() {
     fs::write(&flow_path, valid_flow("profiles/hc.yaml")).unwrap();
 
     let flow = parse_yaml_content(&valid_flow("profiles/hc.yaml"), &flow_path).unwrap();
-    assert_eq!(flow.platform, Some(Platform::LumiE2e));
+    assert_eq!(flow.platform, Some(Platform::LumiHc));
     assert_eq!(flow.journey.as_deref(), Some("system_journey"));
     assert_eq!(flow.profile.as_deref(), Some("profiles/hc.yaml"));
     assert_eq!(flow.default_timeout_ms, Some(15000));
@@ -173,7 +173,7 @@ fn parses_valid_lumi_e2e_flow_with_stable_commands_and_requirements() {
             "wsSnapshot"
         ]
     );
-    assert!(matches!(flow.commands[0], TestCommand::E2e(E2eCommand::HcHealth)));
+    assert!(matches!(flow.commands[0], TestCommand::V3(V3Command::HcHealth)));
 
     let metadata = validate_flow(&flow_path, &flow).unwrap();
     assert_eq!(metadata.required_capabilities.len(), 5);
@@ -187,9 +187,9 @@ fn parses_valid_lumi_e2e_flow_with_stable_commands_and_requirements() {
     assert_eq!(
         control_requirements.capabilities,
         vec![
-            E2eCapability::DeviceControl,
-            E2eCapability::DeviceState,
-            E2eCapability::RealtimeCellReadback,
+            V3Capability::DeviceControl,
+            V3Capability::DeviceState,
+            V3Capability::RealtimeCellReadback,
         ]
     );
 
@@ -510,7 +510,7 @@ fn rejects_control_profile_without_state_or_realtime_readback() {
     .unwrap();
     let flow_path = dir.join("device-control.yaml");
     let flow_yaml = r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -532,7 +532,7 @@ profile: hc.yaml
 #[test]
 fn accepts_control_with_either_readback_capability_and_advertises_both() {
     let control_flow = r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -554,9 +554,9 @@ profile: hc.yaml
         assert_eq!(
             metadata.command_requirements[0].capabilities,
             vec![
-                E2eCapability::DeviceControl,
-                E2eCapability::DeviceState,
-                E2eCapability::RealtimeCellReadback,
+                V3Capability::DeviceControl,
+                V3Capability::DeviceState,
+                V3Capability::RealtimeCellReadback,
             ]
         );
 
@@ -618,9 +618,9 @@ appId: com.example.app
 }
 
 #[test]
-fn rejects_parameters_on_parameterless_e2e_commands() {
+fn rejects_parameters_on_parameterless_v3_commands() {
     let flow_yaml = r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -669,7 +669,7 @@ fn journey_is_metadata_and_deferred_capability_is_still_rejected() {
     validate_flow(&flow_path, &flow).unwrap();
 
     let deferred = r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -687,7 +687,7 @@ profile: hc.yaml
 #[test]
 fn rejects_malformed_explicit_idx_and_value() {
     let fractional = r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -701,7 +701,7 @@ profile: hc.yaml
     assert!(error.to_string().contains("idx"));
 
     let missing_value = r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -715,7 +715,7 @@ profile: hc.yaml
 }
 
 #[test]
-fn preserves_legacy_yaml_without_e2e_fields() {
+fn preserves_legacy_yaml_without_v3_fields() {
     let yaml = r#"
 platform: android
 appId: com.example.app
@@ -732,7 +732,7 @@ appId: com.example.app
 }
 
 #[test]
-fn emits_structured_e2e_cli_json() {
+fn emits_structured_v3_cli_json() {
     let dir = temp_flow_dir("cli-json");
     fs::write(dir.join("hc.yaml"), VALID_PROFILE).unwrap();
     let flow_path = dir.join("device-control.yaml");
@@ -746,7 +746,7 @@ fn emits_structured_e2e_cli_json() {
     assert!(validate.status.success(), "{}", String::from_utf8_lossy(&validate.stderr));
     let validate_json: serde_json::Value = serde_json::from_slice(&validate.stdout).unwrap();
     assert_eq!(validate_json["valid"], true);
-    assert_eq!(validate_json["files"][0]["platform"], "lumi_e2e");
+    assert_eq!(validate_json["files"][0]["platform"], "lumi_hc");
     assert_eq!(validate_json["files"][0]["journey"], "system_journey");
     assert_eq!(validate_json["files"][0]["profile"], "hc.yaml");
     assert_eq!(validate_json["files"][0]["commands"][0]["index"], 0);
@@ -767,14 +767,14 @@ fn emits_structured_e2e_cli_json() {
 }
 
 #[test]
-fn e2e_runner_reaches_existing_report_boundary_with_structured_observation() {
+fn v3_runner_reaches_existing_report_boundary_with_structured_observation() {
     let dir = temp_flow_dir("runner-report-boundary");
     fs::write(dir.join("hc.yaml"), VALID_PROFILE).unwrap();
     let flow_path = dir.join("device-control.yaml");
     fs::write(
         &flow_path,
         r#"
-platform: lumi_e2e
+platform: lumi_hc
 journey: system_journey
 profile: hc.yaml
 ---
@@ -790,7 +790,7 @@ profile: hc.yaml
             "run",
             flow_path.to_str().unwrap(),
             "--platform",
-            "lumi_e2e",
+            "lumi_hc",
             "--continue-on-failure",
             "--report",
             "--events-jsonl",
@@ -803,11 +803,8 @@ profile: hc.yaml
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
 
-    assert!(output.status.success(), "{combined}");
-    assert!(combined.contains("action"), "{combined}");
-    assert!(combined.contains("readback"), "{combined}");
-    assert!(combined.contains("assertion"), "{combined}");
-    assert!(combined.contains("evidence"), "{combined}");
+    assert!(!output.status.success(), "{combined}");
+    assert!(combined.contains("Multi-target status: Blocked"), "{combined}");
     assert!(output_dir.join("test-results.json").is_file());
     assert!(output_dir.join("events.jsonl").is_file());
 
@@ -815,14 +812,14 @@ profile: hc.yaml
         serde_json::from_str(&fs::read_to_string(output_dir.join("test-results.json")).unwrap())
             .unwrap();
     assert_eq!(report["flows"][0]["commands"][0]["commandName"], "hcHealth");
+    assert_eq!(report["status"], "blocked");
     assert_eq!(report["flows"][0]["status"]["type"], "failed");
-    let command_error = report["flows"][0]["commands"][0]["status"]["error"]
-        .as_str()
-        .unwrap();
-    assert!(command_error.contains("action"), "{command_error}");
-    assert!(command_error.contains("readback"), "{command_error}");
-    assert!(command_error.contains("assertion"), "{command_error}");
-    assert!(command_error.contains("evidence"), "{command_error}");
+    assert_eq!(report["flows"][0]["commands"][0]["status"]["type"], "skipped");
+    assert_eq!(report["flows"][0]["evidenceTier"], "real_preflight");
+    assert!(report["operations"][0]["result"]["rawEvidence"]["action"].is_null());
+    assert!(report["operations"][0]["result"]["rawEvidence"]["readback"].is_null());
+    assert!(report["operations"][0]["result"]["rawEvidence"]["assertion"].is_null());
+    assert!(report["operations"][0]["result"]["rawEvidence"]["evidence"].is_array());
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -847,6 +844,6 @@ fn prints_human_list_errors_with_paths_and_reasons() {
 }
 
 #[allow(dead_code)]
-fn _assert_typed_error(error: E2eValidationError) {
+fn _assert_typed_error(error: V3ValidationError) {
     assert!(!error.code().is_empty());
 }

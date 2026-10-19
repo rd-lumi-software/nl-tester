@@ -100,8 +100,8 @@ HC-oriented YAML. It maps to gateway.profile when no gateway component exists.
 The migration produces a deprecation diagnostic. A canonical document must use
 gateway.profile or cloud.profile.
 
-platform: lumi_e2e is a legacy compatibility alias for the current HC work. If
-its profile is an HC profile, it normalizes to gateway.platform: lumi_hc. It is
+The public HC platform is `lumi_hc`. An old platform alias is rejected instead
+of being normalized, so a flow cannot silently select a different target. It is
 not a new component type and must not remain the internal adapter-selection model.
 
 ### 2.4 journey
@@ -312,8 +312,8 @@ The v3 WebSocket has subscribe/data/RPC envelopes, supports device and cell
 channels, has no replay guarantee, and requires HTTP resynchronization after
 reconnect. These details stay inside the gateway adapter and evidence normalizer.
 
-Existing src/e2e canonical, HTTP, WebSocket, profile, result, redaction, and
-evidence code is retained as the HC implementation boundary and refactored behind
+Existing HC canonical, HTTP, WebSocket, profile, result, redaction, and
+evidence code is owned by `src/hc/backends/v3/runtime` and refactored behind
 the generic adapter interface where needed.
 
 ## 7. Cloud mock boundary
@@ -439,8 +439,8 @@ Migration is additive:
 
 1. Existing App header YAML is normalized to app with no file rewrite.
 2. Existing journey continues to parse with a deprecation warning.
-3. Existing HC lumi_e2e/profile YAML is accepted through a compatibility
-   normalization path and reported as legacy.
+3. HC flows use `platform: lumi_hc`; unsupported old platform aliases are
+   rejected during validation.
 4. New multi-target flows use explicit app, gateway, and cloud components.
 5. Existing App driver, command names, command indexes, output artifacts, and
    event JSONL remain compatible.

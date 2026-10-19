@@ -5,7 +5,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum E2eStatus {
+pub enum V3Status {
     Passed,
     Failed,
     Blocked,
@@ -14,7 +14,7 @@ pub enum E2eStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum E2eCategory {
+pub enum V3Category {
     Preflight,
     NoLab,
     UnsupportedCapability,
@@ -41,9 +41,9 @@ pub enum EvidenceTier {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct E2eResult {
-    pub status: E2eStatus,
-    pub category: E2eCategory,
+pub struct V3Result {
+    pub status: V3Status,
+    pub category: V3Category,
     pub message: String,
     pub retry_count: u32,
     pub evidence_tier: EvidenceTier,
@@ -56,9 +56,9 @@ pub struct E2eResult {
     pub normalized: Option<Value>,
 }
 
-impl E2eResult {
+impl V3Result {
     pub fn passed(
-        category: E2eCategory,
+        category: V3Category,
         tier: EvidenceTier,
         action: Value,
         readback: Value,
@@ -77,14 +77,14 @@ impl E2eResult {
             || normalized.as_ref().map(|value| value.is_null()).unwrap_or(true)
         {
             return Self::error(
-                E2eCategory::EvidenceError,
+                V3Category::EvidenceError,
                 "a passed E2E result requires explicit action, readback, assertion, bounded evidence, and normalized evidence",
                 tier,
             );
         }
 
         Self {
-            status: E2eStatus::Passed,
+            status: V3Status::Passed,
             category,
             message: "operation, bounded readback, assertion, and required evidence completed".to_string(),
             retry_count: 0,
@@ -97,9 +97,9 @@ impl E2eResult {
         }
     }
 
-    pub fn failed(category: E2eCategory, message: impl Into<String>, tier: EvidenceTier) -> Self {
+    pub fn failed(category: V3Category, message: impl Into<String>, tier: EvidenceTier) -> Self {
         Self {
-            status: E2eStatus::Failed,
+            status: V3Status::Failed,
             category,
             message: message.into(),
             retry_count: 0,
@@ -112,9 +112,9 @@ impl E2eResult {
         }
     }
 
-    pub fn blocked(category: E2eCategory, message: impl Into<String>) -> Self {
+    pub fn blocked(category: V3Category, message: impl Into<String>) -> Self {
         Self {
-            status: E2eStatus::Blocked,
+            status: V3Status::Blocked,
             category,
             message: message.into(),
             retry_count: 0,
@@ -127,9 +127,9 @@ impl E2eResult {
         }
     }
 
-    pub fn error(category: E2eCategory, message: impl Into<String>, tier: EvidenceTier) -> Self {
+    pub fn error(category: V3Category, message: impl Into<String>, tier: EvidenceTier) -> Self {
         Self {
-            status: E2eStatus::Error,
+            status: V3Status::Error,
             category,
             message: message.into(),
             retry_count: 0,
@@ -168,11 +168,11 @@ pub fn readback_matches(
     })
 }
 
-pub fn classify_health(status: bool, tier: EvidenceTier) -> E2eResult {
+pub fn classify_health(status: bool, tier: EvidenceTier) -> V3Result {
     if status {
         let normalized = serde_json::json!({"status": true});
-        E2eResult::passed(
-            E2eCategory::Preflight,
+        V3Result::passed(
+            V3Category::Preflight,
             tier,
             serde_json::json!({"operation": "health"}),
             normalized.clone(),
@@ -196,8 +196,8 @@ pub fn classify_health(status: bool, tier: EvidenceTier) -> E2eResult {
             Some(normalized),
         )
     } else {
-        E2eResult::failed(
-            E2eCategory::AssertionMismatch,
+        V3Result::failed(
+            V3Category::AssertionMismatch,
             "HC health/readiness returned status=false",
             tier,
         )
@@ -207,7 +207,7 @@ pub fn classify_health(status: bool, tier: EvidenceTier) -> E2eResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::e2e::canonical::{DecimalId, EntityRef, SlotState, StateSource};
+    use crate::hc::backends::v3::runtime::canonical::{DecimalId, EntityRef, SlotState, StateSource};
 
     fn entity(id: &str) -> EntityRef {
         EntityRef {
@@ -223,10 +223,10 @@ mod tests {
 
     #[test]
     fn classification_never_turns_dispatch_status_into_physical_pass() {
-        assert_eq!(classify_health(true, EvidenceTier::MockContract).status, E2eStatus::Passed);
-        assert_eq!(classify_health(false, EvidenceTier::MockContract).status, E2eStatus::Failed);
-        assert_eq!(E2eResult::blocked(E2eCategory::NoLab, "missing lab").status, E2eStatus::Blocked);
-        assert_eq!(E2eResult::error(E2eCategory::Timeout, "timed out", EvidenceTier::RealE2e).status, E2eStatus::Error);
+        assert_eq!(classify_health(true, EvidenceTier::MockContract).status, V3Status::Passed);
+        assert_eq!(classify_health(false, EvidenceTier::MockContract).status, V3Status::Failed);
+        assert_eq!(V3Result::blocked(V3Category::NoLab, "missing lab").status, V3Status::Blocked);
+        assert_eq!(V3Result::error(V3Category::Timeout, "timed out", EvidenceTier::RealE2e).status, V3Status::Error);
     }
 
     #[test]

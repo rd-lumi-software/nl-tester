@@ -1,6 +1,6 @@
 use super::evidence::FlowRootAuthority;
 pub use super::evidence::{EvidenceBoundaryError, EvidenceRoot, EvidenceWriter};
-use super::types::{E2eCapability, E2eCommandRequirement};
+use super::types::{V3Capability, V3CommandRequirement};
 use crate::parser::types::{Platform, TestCommand, TestFlow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -22,12 +22,12 @@ const REQUIRED_REDACT_FIELDS: [&str; 6] = [
 ];
 
 #[derive(Debug, Error)]
-pub enum E2eValidationError {
-    #[error("E2E commands require a gateway component with platform: lumi_hc")]
+pub enum V3ValidationError {
+    #[error("V3 HC commands require a gateway component with platform: lumi_hc")]
     UnsupportedPlatform,
     #[error("App command '{command}' is outside the HC gateway flow scope")]
     DeferredCommand { command: String },
-    #[error("E2E flow requires a relative profile path")]
+    #[error("V3 HC flow requires a relative profile path")]
     MissingProfile,
     #[error("profile path '{profile}' must be relative to the flow file")]
     InvalidProfilePath { profile: String },
@@ -58,7 +58,7 @@ pub enum E2eValidationError {
     },
 }
 
-impl E2eValidationError {
+impl V3ValidationError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnsupportedPlatform => "unsupported_platform",
@@ -87,41 +87,41 @@ impl E2eValidationError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eProfile {
+pub struct V3Profile {
     pub implementation: String,
     pub protocol_pack: String,
     pub protocol_version: String,
     pub pack_version: String,
-    pub target: E2eTarget,
-    pub endpoint: E2eEndpoint,
-    pub auth: E2eAuth,
-    pub capabilities: Vec<E2eCapability>,
-    pub evidence: E2eEvidence,
-    pub retry: E2eRetry,
+    pub target: V3Target,
+    pub endpoint: V3Endpoint,
+    pub auth: V3Auth,
+    pub capabilities: Vec<V3Capability>,
+    pub evidence: V3Evidence,
+    pub retry: V3Retry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eTarget {
+pub struct V3Target {
     pub chip: String,
     pub firmware: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eEndpoint {
+pub struct V3Endpoint {
     pub base_url: String,
     pub websocket_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct E2eAuth {
+pub struct V3Auth {
     pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eEvidence {
+pub struct V3Evidence {
     pub root: String,
     pub max_raw_bytes: u64,
     #[serde(rename = "maxWebSocketFrames")]
@@ -131,31 +131,31 @@ pub struct E2eEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct E2eRetry {
+pub struct V3Retry {
     pub safe_http_max_attempts: u64,
     pub control_max_attempts: u64,
     pub websocket_reconnect_max_attempts: u64,
 }
 
 #[derive(Debug, Clone)]
-pub struct LoadedE2eProfile {
+pub struct LoadedV3Profile {
     pub path: PathBuf,
-    pub profile: E2eProfile,
+    pub profile: V3Profile,
     pub evidence_root: EvidenceRoot,
 }
 
-impl LoadedE2eProfile {
+impl LoadedV3Profile {
     pub fn open_evidence_writer(&self) -> Result<EvidenceWriter, EvidenceBoundaryError> {
         self.evidence_root.open_writer()
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct E2eFlowMetadata {
+pub struct V3FlowMetadata {
     pub profile_ref: String,
     pub profile_path: PathBuf,
-    pub required_capabilities: Vec<E2eCapability>,
-    pub command_requirements: Vec<E2eCommandRequirement>,
+    pub required_capabilities: Vec<V3Capability>,
+    pub command_requirements: Vec<V3CommandRequirement>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +165,7 @@ struct RawProfile {
     protocol_pack: Option<String>,
     protocol_version: Option<String>,
     pack_version: Option<String>,
-    target: Option<E2eTarget>,
+    target: Option<V3Target>,
     endpoint: Option<RawEndpoint>,
     auth: Option<RawAuth>,
     capabilities: Option<Vec<String>>,
@@ -206,15 +206,15 @@ struct RawRetry {
 pub fn load_profile(
     flow_path: &Path,
     profile_ref: &str,
-) -> Result<LoadedE2eProfile, E2eValidationError> {
+) -> Result<LoadedV3Profile, V3ValidationError> {
     let profile_ref = profile_ref.trim();
     if profile_ref.is_empty() {
-        return Err(E2eValidationError::MissingProfile);
+        return Err(V3ValidationError::MissingProfile);
     }
 
     let profile_path = Path::new(profile_ref);
     if profile_path.is_absolute() || profile_ref.contains("${") {
-        return Err(E2eValidationError::InvalidProfilePath {
+        return Err(V3ValidationError::InvalidProfilePath {
             profile: profile_ref.to_string(),
         });
     }
@@ -222,19 +222,19 @@ pub fn load_profile(
     let flow_dir = flow_path.parent().unwrap_or_else(|| Path::new("."));
     let resolved_path = flow_dir.join(profile_path);
     if !resolved_path.is_file() {
-        return Err(E2eValidationError::ProfileNotFound {
+        return Err(V3ValidationError::ProfileNotFound {
             profile: profile_ref.to_string(),
         });
     }
 
     let content = std::fs::read_to_string(&resolved_path).map_err(|error| {
-        E2eValidationError::ProfileRead {
+        V3ValidationError::ProfileRead {
             profile: profile_ref.to_string(),
             reason: error.to_string(),
         }
     })?;
     let raw: RawProfile = serde_yaml::from_str(&content).map_err(|error| {
-        E2eValidationError::ProfileParse {
+        V3ValidationError::ProfileParse {
             profile: profile_ref.to_string(),
             reason: error.to_string(),
         }
@@ -243,7 +243,7 @@ pub fn load_profile(
     let evidence_root = resolve_evidence_root(flow_dir, &profile.evidence.root)?;
     profile.evidence.root = evidence_root.path().to_string_lossy().into_owned();
 
-    Ok(LoadedE2eProfile {
+    Ok(LoadedV3Profile {
         path: resolved_path,
         profile,
         evidence_root,
@@ -253,29 +253,28 @@ pub fn load_profile(
 pub fn validate_flow(
     flow_path: &Path,
     flow: &TestFlow,
-) -> Result<E2eFlowMetadata, E2eValidationError> {
-    let e2e_commands = flow
+) -> Result<V3FlowMetadata, V3ValidationError> {
+    let v3_commands = flow
         .commands
         .iter()
         .filter_map(|command| match command {
-            TestCommand::E2e(command) => Some(command),
+            TestCommand::V3(command) => Some(command),
             _ => None,
         })
         .collect::<Vec<_>>();
-    let has_e2e_commands = !e2e_commands.is_empty();
+    let has_v3_commands = !v3_commands.is_empty();
 
-    let legacy_hc_flow = matches!(flow.platform, Some(Platform::LumiE2e));
     let gateway_component = flow
         .gateway
         .as_ref()
         .filter(|component| component.platform == "lumi_hc");
     let direct_hc_flow = matches!(flow.platform, Some(Platform::LumiHc));
 
-    if !legacy_hc_flow && !direct_hc_flow && gateway_component.is_none() {
-        if has_e2e_commands {
-            return Err(E2eValidationError::UnsupportedPlatform);
+    if !direct_hc_flow && gateway_component.is_none() {
+        if has_v3_commands {
+            return Err(V3ValidationError::UnsupportedPlatform);
         }
-        return Ok(E2eFlowMetadata {
+        return Ok(V3FlowMetadata {
             profile_ref: String::new(),
             profile_path: PathBuf::new(),
             required_capabilities: Vec::new(),
@@ -284,8 +283,8 @@ pub fn validate_flow(
     }
 
     for command in &flow.commands {
-        if !matches!(command, TestCommand::E2e(_)) {
-            return Err(E2eValidationError::DeferredCommand {
+        if !matches!(command, TestCommand::V3(_)) {
+            return Err(V3ValidationError::DeferredCommand {
                 command: command.display_name(),
             });
         }
@@ -295,17 +294,17 @@ pub fn validate_flow(
         .profile
         .as_deref()
         .or_else(|| gateway_component.and_then(|component| component.profile.as_deref()))
-        .ok_or(E2eValidationError::MissingProfile)?;
+        .ok_or(V3ValidationError::MissingProfile)?;
     let loaded = load_profile(flow_path, profile_ref)?;
-    let command_requirements = e2e_commands
+    let command_requirements = v3_commands
         .iter()
         .enumerate()
-        .map(|(index, command)| E2eCommandRequirement::for_command(index, command))
+        .map(|(index, command)| V3CommandRequirement::for_command(index, command))
         .collect::<Vec<_>>();
 
     let mut required_capabilities = Vec::new();
     let mut seen = HashSet::new();
-    for command in &e2e_commands {
+    for command in &v3_commands {
         for capability in command.required_capabilities() {
             if seen.insert(capability) {
                 required_capabilities.push(capability);
@@ -313,18 +312,18 @@ pub fn validate_flow(
         }
     }
 
-    for (command, requirement) in e2e_commands.iter().zip(&command_requirements) {
+    for (command, requirement) in v3_commands.iter().zip(&command_requirements) {
         for capability in &requirement.capabilities {
-            if matches!(command, super::types::E2eCommand::HcControl(_))
+            if matches!(command, super::types::V3Command::HcControl(_))
                 && matches!(
                     capability,
-                    E2eCapability::DeviceState | E2eCapability::RealtimeCellReadback
+                    V3Capability::DeviceState | V3Capability::RealtimeCellReadback
                 )
             {
                 continue;
             }
             if !loaded.profile.capabilities.contains(capability) {
-                return Err(E2eValidationError::MissingCapability {
+                return Err(V3ValidationError::MissingCapability {
                     capability: capability.as_str().to_string(),
                     command: requirement.name.clone(),
                 });
@@ -332,25 +331,25 @@ pub fn validate_flow(
         }
     }
 
-    for command in &e2e_commands {
-        if matches!(command, super::types::E2eCommand::HcControl(_))
+    for command in &v3_commands {
+        if matches!(command, super::types::V3Command::HcControl(_))
             && !loaded
                 .profile
                 .capabilities
-                .contains(&E2eCapability::DeviceState)
+                .contains(&V3Capability::DeviceState)
             && !loaded
                 .profile
                 .capabilities
-                .contains(&E2eCapability::RealtimeCellReadback)
+                .contains(&V3Capability::RealtimeCellReadback)
         {
-            return Err(E2eValidationError::MissingCapability {
+            return Err(V3ValidationError::MissingCapability {
                 capability: "device_state or realtime_cell_readback".to_string(),
                 command: command.display_name().to_string(),
             });
         }
     }
 
-    Ok(E2eFlowMetadata {
+    Ok(V3FlowMetadata {
         profile_ref: profile_ref.to_string(),
         profile_path: loaded.path,
         required_capabilities,
@@ -358,7 +357,7 @@ pub fn validate_flow(
     })
 }
 
-fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
+fn build_profile(raw: RawProfile) -> Result<V3Profile, V3ValidationError> {
     let implementation = required_value(raw.implementation, "implementation")?;
     let protocol_pack = required_value(raw.protocol_pack, "protocolPack")?;
     let protocol_version = required_value(raw.protocol_version, "protocolVersion")?;
@@ -375,7 +374,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
         .target
         .ok_or_else(|| missing("target"))
         .and_then(|target| {
-            Ok(E2eTarget {
+            Ok(V3Target {
                 chip: required_value(Some(target.chip), "target.chip")?,
                 firmware: required_value(Some(target.firmware), "target.firmware")?,
             })
@@ -388,7 +387,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
             let websocket_url = required_value(endpoint.websocket_url, "endpoint.websocketUrl")?;
             validate_endpoint(&base_url, "endpoint.baseUrl", false)?;
             validate_endpoint(&websocket_url, "endpoint.websocketUrl", true)?;
-            Ok(E2eEndpoint {
+            Ok(V3Endpoint {
                 base_url,
                 websocket_url,
             })
@@ -397,7 +396,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
         .auth
         .ok_or_else(|| missing("auth"))
         .and_then(|auth| {
-            Ok(E2eAuth {
+            Ok(V3Auth {
                 mode: required_value(auth.mode, "auth.mode")?,
             })
         })?;
@@ -407,7 +406,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
     let capabilities = capability_names
         .into_iter()
         .map(|capability| {
-            E2eCapability::parse(&capability).ok_or(E2eValidationError::DeferredCapability {
+            V3Capability::parse(&capability).ok_or(V3ValidationError::DeferredCapability {
                 capability,
             })
         })
@@ -432,7 +431,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
             if max_websocket_frames == 0 {
                 return Err(missing("evidence.maxWebSocketFrames"));
             }
-            Ok(E2eEvidence {
+            Ok(V3Evidence {
                 root: required_value(evidence.root, "evidence.root")?,
                 max_raw_bytes,
                 max_websocket_frames,
@@ -448,7 +447,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
         .retry
         .ok_or_else(|| missing("retry"))
         .and_then(|retry| {
-            Ok(E2eRetry {
+            Ok(V3Retry {
                 safe_http_max_attempts: retry
                     .safe_http_max_attempts
                     .ok_or_else(|| missing("retry.safeHttpMaxAttempts"))?,
@@ -461,7 +460,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
             })
         })?;
 
-    Ok(E2eProfile {
+    Ok(V3Profile {
         implementation,
         protocol_pack,
         protocol_version,
@@ -475,7 +474,7 @@ fn build_profile(raw: RawProfile) -> Result<E2eProfile, E2eValidationError> {
     })
 }
 
-fn required_value(value: Option<String>, field: &str) -> Result<String, E2eValidationError> {
+fn required_value(value: Option<String>, field: &str) -> Result<String, V3ValidationError> {
     let value = value.ok_or_else(|| missing(field))?;
     if value.trim().is_empty() {
         return Err(missing(field));
@@ -487,9 +486,9 @@ fn validate_supported_value(
     field: &str,
     value: &str,
     supported: &str,
-) -> Result<(), E2eValidationError> {
+) -> Result<(), V3ValidationError> {
     if value != supported {
-        return Err(E2eValidationError::UnsupportedProfileValue {
+        return Err(V3ValidationError::UnsupportedProfileValue {
             field: field.to_string(),
             value: value.to_string(),
         });
@@ -501,13 +500,13 @@ fn validate_endpoint(
     value: &str,
     field: &str,
     websocket: bool,
-) -> Result<(), E2eValidationError> {
+) -> Result<(), V3ValidationError> {
     if is_environment_reference(value) {
         return Ok(());
     }
 
     let expected = if websocket { "ws:// or wss://" } else { "http:// or https://" };
-    let parsed = reqwest::Url::parse(value).map_err(|_| E2eValidationError::InvalidEndpoint {
+    let parsed = reqwest::Url::parse(value).map_err(|_| V3ValidationError::InvalidEndpoint {
         field: field.to_string(),
         expected: expected.to_string(),
         value: value.to_string(),
@@ -518,7 +517,7 @@ fn validate_endpoint(
         matches!(parsed.scheme(), "http" | "https")
     };
     if !scheme_valid || parsed.host_str().is_none() {
-        return Err(E2eValidationError::InvalidEndpoint {
+        return Err(V3ValidationError::InvalidEndpoint {
             field: field.to_string(),
             expected: expected.to_string(),
             value: value.to_string(),
@@ -531,10 +530,10 @@ fn is_environment_reference(value: &str) -> bool {
     value.starts_with("${") && value.ends_with('}') && value.len() > 3
 }
 
-fn resolve_evidence_root(flow_dir: &Path, root: &str) -> Result<EvidenceRoot, E2eValidationError> {
+fn resolve_evidence_root(flow_dir: &Path, root: &str) -> Result<EvidenceRoot, V3ValidationError> {
     let root_path = Path::new(root);
     if root_path.is_absolute() || root.contains("${") {
-        return Err(E2eValidationError::InvalidEvidenceRoot {
+        return Err(V3ValidationError::InvalidEvidenceRoot {
             root: root.to_string(),
         });
     }
@@ -546,7 +545,7 @@ fn resolve_evidence_root(flow_dir: &Path, root: &str) -> Result<EvidenceRoot, E2
             Component::CurDir => {}
             Component::Normal(value) => {
                 if !valid_evidence_component(value) {
-                    return Err(E2eValidationError::InvalidEvidenceRoot {
+                    return Err(V3ValidationError::InvalidEvidenceRoot {
                         root: root.to_string(),
                     });
                 }
@@ -555,13 +554,13 @@ fn resolve_evidence_root(flow_dir: &Path, root: &str) -> Result<EvidenceRoot, E2
             }
             Component::ParentDir => {
                 if !relative.pop() || relative_components.pop().is_none() {
-                    return Err(E2eValidationError::InvalidEvidenceRoot {
+                    return Err(V3ValidationError::InvalidEvidenceRoot {
                         root: root.to_string(),
                     });
                 }
             }
             Component::RootDir | Component::Prefix(_) => {
-                return Err(E2eValidationError::InvalidEvidenceRoot {
+                return Err(V3ValidationError::InvalidEvidenceRoot {
                     root: root.to_string(),
                 })
             }
@@ -571,26 +570,26 @@ fn resolve_evidence_root(flow_dir: &Path, root: &str) -> Result<EvidenceRoot, E2
     let lexical_flow_dir = absolute_lexical_path(flow_dir, root)?;
     reject_existing_reparse_components(&lexical_flow_dir, root)?;
     let authority = FlowRootAuthority::establish(&lexical_flow_dir).map_err(|_| {
-        E2eValidationError::InvalidEvidenceRoot {
+        V3ValidationError::InvalidEvidenceRoot {
             root: root.to_string(),
         }
     })?;
     let base = authority.path().to_path_buf();
     let resolved = base.join(relative);
     if !resolved.starts_with(&base) {
-        return Err(E2eValidationError::InvalidEvidenceRoot {
+        return Err(V3ValidationError::InvalidEvidenceRoot {
             root: root.to_string(),
         });
     }
     reject_existing_reparse_components(&resolved, root)?;
     let existing_ancestor = nearest_existing_ancestor(&resolved, root)?;
     let canonical_ancestor = std::fs::canonicalize(existing_ancestor).map_err(|_| {
-        E2eValidationError::InvalidEvidenceRoot {
+        V3ValidationError::InvalidEvidenceRoot {
             root: root.to_string(),
         }
     })?;
     if !canonical_ancestor.starts_with(&base) {
-        return Err(E2eValidationError::InvalidEvidenceRoot {
+        return Err(V3ValidationError::InvalidEvidenceRoot {
             root: root.to_string(),
         });
     }
@@ -604,31 +603,31 @@ fn valid_evidence_component(value: &std::ffi::OsStr) -> bool {
     !value.is_empty() && !value.contains('\0') && (!cfg!(windows) || !value.contains(':'))
 }
 
-fn absolute_lexical_path(path: &Path, root: &str) -> Result<PathBuf, E2eValidationError> {
+fn absolute_lexical_path(path: &Path, root: &str) -> Result<PathBuf, V3ValidationError> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
     }
     std::env::current_dir()
         .map(|current| current.join(path))
-        .map_err(|_| E2eValidationError::InvalidEvidenceRoot {
+        .map_err(|_| V3ValidationError::InvalidEvidenceRoot {
             root: root.to_string(),
         })
 }
 
-fn nearest_existing_ancestor(path: &Path, root: &str) -> Result<PathBuf, E2eValidationError> {
+fn nearest_existing_ancestor(path: &Path, root: &str) -> Result<PathBuf, V3ValidationError> {
     let mut candidate = path;
     loop {
         match std::fs::symlink_metadata(candidate) {
             Ok(_) => return Ok(candidate.to_path_buf()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 candidate = candidate.parent().ok_or_else(|| {
-                    E2eValidationError::InvalidEvidenceRoot {
+                    V3ValidationError::InvalidEvidenceRoot {
                         root: root.to_string(),
                     }
                 })?;
             }
             Err(_) => {
-                return Err(E2eValidationError::InvalidEvidenceRoot {
+                return Err(V3ValidationError::InvalidEvidenceRoot {
                     root: root.to_string(),
                 })
             }
@@ -636,7 +635,7 @@ fn nearest_existing_ancestor(path: &Path, root: &str) -> Result<PathBuf, E2eVali
     }
 }
 
-fn reject_existing_reparse_components(path: &Path, root: &str) -> Result<(), E2eValidationError> {
+fn reject_existing_reparse_components(path: &Path, root: &str) -> Result<(), V3ValidationError> {
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
@@ -646,14 +645,14 @@ fn reject_existing_reparse_components(path: &Path, root: &str) -> Result<(), E2e
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
-                    return Err(E2eValidationError::InvalidEvidenceRoot {
+                    return Err(V3ValidationError::InvalidEvidenceRoot {
                         root: root.to_string(),
                     });
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
             Err(_) => {
-                return Err(E2eValidationError::InvalidEvidenceRoot {
+                return Err(V3ValidationError::InvalidEvidenceRoot {
                     root: root.to_string(),
                 })
             }
@@ -675,13 +674,13 @@ fn is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
     false
 }
 
-fn missing(field: &str) -> E2eValidationError {
-    E2eValidationError::MissingProfileField {
+fn missing(field: &str) -> V3ValidationError {
+    V3ValidationError::MissingProfileField {
         field: field.to_string(),
     }
 }
 
-fn validate_redact_fields(fields: Vec<String>) -> Result<Vec<String>, E2eValidationError> {
+fn validate_redact_fields(fields: Vec<String>) -> Result<Vec<String>, V3ValidationError> {
     let mut normalized = Vec::with_capacity(fields.len());
     let mut seen = HashSet::new();
 
