@@ -70,3 +70,22 @@ unresolved: []
 The response must distinguish `passed`, `failed`, `blocked`, `error`, and
 `not_run`. Missing artifacts or unresolved assumptions must remain visible in
 the aggregate report.
+
+Validate the response mechanically before aggregation:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate-delegation plan.yaml response.json --json
+```
+
+The validator rejects plan ID mismatches, unknown targets/evidence tiers,
+duplicate command indexes, artifacts outside `outputDir`, unresolved
+assumptions on a passed response, and false restoration claims. The
+orchestrator consumes the agent's listed indexes; it never counts command
+indexes itself.
+
+Before aggregation, validate the response with `plan validate-delegation`.
+The validator checks plan identity, phase/status, validation result, unique
+listed command indexes, output-root containment for artifacts and generated
+flows, evidence tier, required `run.json`, restoration verification, and
+unresolved assumptions. A response cannot claim `passed` while evidence is
+incomplete.

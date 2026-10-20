@@ -11,6 +11,7 @@ pub mod recorder;
 pub mod report;
 pub mod requirements;
 pub mod runner;
+pub mod orchestrator;
 pub mod updater;
 pub mod utils;
 

@@ -77,6 +77,7 @@ DISTRIBUTION_MD = ROOT / "lumi-tester" / "docs" / "distribution.md"
 PACKAGE_MANIFEST_SCRIPT = ROOT / "lumi-tester" / "scripts" / "generate-package-manifests.sh"
 MAIN_RS = ROOT / "lumi-tester" / "src" / "main.rs"
 REQUIRED_AGENT_PLATFORMS = {"android", "android_auto", "ios", "web", "macos", "windows"}
+REQUIRED_AGENT_RUN_PLATFORMS = REQUIRED_AGENT_PLATFORMS | {"lumi_hc"}
 
 
 def parser_commands() -> set[str]:
@@ -401,6 +402,8 @@ def validate_helper_script_reference() -> list[str]:
     for platform in REQUIRED_AGENT_PLATFORMS:
         if f'"{platform}"' not in helper_text:
             errors.append(f"{HELPER_SCRIPT}: helper should accept platform: {platform}")
+    if '"lumi_hc"' not in helper_text:
+        errors.append(f"{HELPER_SCRIPT}: helper should accept platform: lumi_hc for agent-run")
     required_agent_commands = {
         "agent-check": {
             "validate",
@@ -426,6 +429,15 @@ def validate_helper_script_reference() -> list[str]:
         "agent-list": {"list", "--json"},
         "agent-schema": {"schema", "--json"},
         "agent-doctor": {"doctor", "--platform", "--json"},
+        "agent-hc-preflight": {
+            "agent-hc-preflight",
+            "hcHealth",
+            "hcGetEntities",
+            "--report",
+            "--snapshot",
+            "--events-jsonl",
+            "--summary-json",
+        },
         "agent-run": {"run", "--platform", "--report", "--snapshot", "--events-jsonl", "--output"},
         "agent-debug": {
             "run",
@@ -620,6 +632,44 @@ def validate_helper_script_behavior() -> list[str]:
     desktop_run = helper.parse_agent_run(["desktop.yaml", "--platform", "macos"])
     if "--platform" not in desktop_run or "macos" not in desktop_run:
         errors.append(f"{HELPER_SCRIPT}: agent-run should accept macos")
+    hc_run = helper.parse_agent_run(["hc.yaml", "--platform", "lumi_hc"])
+    if "--platform" not in hc_run or "lumi_hc" not in hc_run:
+        errors.append(f"{HELPER_SCRIPT}: agent-run should accept lumi_hc")
+    hc_preflight = helper.parse_agent_hc_preflight(
+        ["preflight.yaml", "--output", "./output/hc", "--summary-json", "./output/hc.json"]
+    )
+    expected_hc_preflight = [
+        "preflight.yaml",
+        "--platform",
+        "lumi_hc",
+        "--report",
+        "--snapshot",
+        "--events-jsonl",
+        "--output",
+        "./output/hc",
+    ]
+    if hc_preflight.run_extra != expected_hc_preflight:
+        errors.append(f"{HELPER_SCRIPT}: HC preflight should use hcHealth flow artifacts")
+    if hc_preflight.summary_json != "./output/hc.json":
+        errors.append(f"{HELPER_SCRIPT}: HC preflight should preserve summary path")
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            helper.parse_agent_doctor(["--platform", "lumi_hc"])
+        except SystemExit:
+            pass
+        else:
+            errors.append(f"{HELPER_SCRIPT}: agent-doctor must reject lumi_hc")
+    safe_hc_list = json.dumps(
+        {"files": [{"commands": [{"index": 0, "name": "hcHealth"}, {"index": 1, "name": "hcGetEntities"}]}]}
+    )
+    if helper.validate_hc_preflight_commands(safe_hc_list) != (True, ""):
+        errors.append(f"{HELPER_SCRIPT}: read-only HC preflight should be accepted")
+    missing_health = json.dumps({"files": [{"commands": [{"index": 0, "name": "hcGetEntities"}]}]})
+    if helper.validate_hc_preflight_commands(missing_health)[0]:
+        errors.append(f"{HELPER_SCRIPT}: HC preflight should require hcHealth")
+    mutating_hc = json.dumps({"files": [{"commands": [{"index": 0, "name": "hcHealth"}, {"index": 1, "name": "hcControl"}]}]})
+    if helper.validate_hc_preflight_commands(mutating_hc)[0]:
+        errors.append(f"{HELPER_SCRIPT}: HC preflight should reject hcControl")
     if helper.parse_passthrough(["run", "tests/smoke.yaml", "--platform", "web"]) != (
         "run",
         ["tests/smoke.yaml", "--platform", "web"],
@@ -1362,15 +1412,23 @@ def validate_cli_platform_catalog() -> list[str]:
     with CLI_CSV.open(newline="", encoding="utf-8") as fh:
         rows = {row["command"].strip(): row for row in csv.DictReader(fh)}
 
-    platform_agnostic_commands = {"validate", "list", "schema", "report", "ai"}
+    platform_agnostic_commands = {"validate", "list", "schema", "report"}
     for command in platform_agnostic_commands:
         platforms = split_field_names(rows[command]["platforms"])
-        missing = sorted(REQUIRED_AGENT_PLATFORMS.difference(platforms))
+        missing = sorted(REQUIRED_AGENT_RUN_PLATFORMS.difference(platforms))
         if missing:
             errors.append(
                 f"{CLI_CSV}: command {command} should list every agent platform: "
                 + ", ".join(missing)
             )
+
+    run_platforms = split_field_names(rows["run"]["platforms"])
+    missing_run = sorted(REQUIRED_AGENT_RUN_PLATFORMS.difference(run_platforms))
+    if missing_run:
+        errors.append(
+            f"{CLI_CSV}: command run should list every execution platform: "
+            + ", ".join(missing_run)
+        )
 
     shell_platforms = split_field_names(rows["shell"]["platforms"])
     for unsupported in ("android_auto", "web"):

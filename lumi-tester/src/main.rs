@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 mod ai;
 
-use lumi_tester::{driver, recorder, report, requirements, runner, utils};
+use lumi_tester::{driver, orchestrator, recorder, report, requirements, runner, utils};
 
 #[derive(Parser)]
 #[command(name = "lumi-tester")]
@@ -167,6 +167,12 @@ enum Commands {
         /// Print machine-readable JSON
         #[arg(long, default_value = "true")]
         json: bool,
+    },
+
+    /// Validate and aggregate machine-readable orchestrator handoff contracts
+    Plan {
+        #[command(subcommand)]
+        command: PlanCommands,
     },
 
     Shell {
@@ -376,6 +382,54 @@ enum Commands {
     Which {
         /// Print machine-readable JSON
         #[arg(long, default_value = "false")]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PlanCommands {
+    /// Validate an orchestrator test plan without contacting a gateway
+    Validate {
+        /// Plan YAML path
+        plan: PathBuf,
+        /// Apply run-readiness safety gates in addition to structural validation
+        #[arg(long, default_value = "false")]
+        for_run: bool,
+        /// Print machine-readable JSON
+        #[arg(long, default_value = "false")]
+        json: bool,
+    },
+    /// Validate a lumi-tester-agent delegation response against a plan
+    ValidateDelegation {
+        /// Plan YAML path
+        plan: PathBuf,
+        /// Delegation response JSON/YAML path
+        response: PathBuf,
+        /// Print machine-readable JSON
+        #[arg(long, default_value = "false")]
+        json: bool,
+    },
+    /// Aggregate target outcomes and inventory drift into aggregate.json
+    Aggregate {
+        /// Plan YAML path
+        plan: PathBuf,
+        /// Delegation response JSON/YAML path; may contain one response or an array
+        #[arg(long)]
+        response: PathBuf,
+        /// Current live inventory snapshot JSON/YAML path
+        #[arg(long)]
+        inventory_current: PathBuf,
+        /// Output directory for aggregate.json
+        #[arg(long, default_value = "./output/orchestrator")]
+        output: PathBuf,
+        /// Print machine-readable JSON
+        #[arg(long, default_value = "false")]
+        json: bool,
+    },
+    /// Print the bundled orchestrator test-plan JSON Schema
+    Schema {
+        /// Print machine-readable JSON
+        #[arg(long, default_value = "true")]
         json: bool,
     },
 }
@@ -956,6 +1010,111 @@ async fn async_main() -> anyhow::Result<()> {
         Commands::Schema { json: _ } => {
             println!("{}", include_str!("../schema/lumi-test.schema.json"));
         }
+
+        Commands::Plan { command } => match command {
+            PlanCommands::Validate { plan, for_run, json } => {
+                let content = std::fs::read_to_string(&plan)
+                    .with_context(|| format!("failed to read orchestrator plan {}", plan.display()))?;
+                let base_dir = plan.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let validation = orchestrator::plan::validate_plan_yaml(&content, for_run, base_dir);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&validation)?);
+                } else {
+                    println!(
+                        "Plan {}: valid={}, readyForRun={}, errors={}, warnings={}",
+                        plan.display(),
+                        validation.valid,
+                        validation.ready_for_run,
+                        validation.errors.len(),
+                        validation.warnings.len()
+                    );
+                }
+                if !validation.valid || (for_run && !validation.ready_for_run) {
+                    anyhow::bail!("orchestrator plan validation failed");
+                }
+            }
+            PlanCommands::ValidateDelegation { plan, response, json } => {
+                let plan_content = std::fs::read_to_string(&plan)
+                    .with_context(|| format!("failed to read orchestrator plan {}", plan.display()))?;
+                let plan_value: orchestrator::plan::OrchestrationPlan =
+                    serde_yaml::from_str(&plan_content).context("invalid orchestrator plan YAML")?;
+                let response_content = std::fs::read_to_string(&response)
+                    .with_context(|| format!("failed to read delegation response {}", response.display()))?;
+                let delegation: orchestrator::delegation::DelegationResponse =
+                    serde_yaml::from_str(&response_content).context("invalid delegation response JSON/YAML")?;
+                let base_dir = response.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let validation = orchestrator::delegation::validate_delegation(
+                    &plan_value,
+                    &delegation,
+                    base_dir,
+                );
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&validation)?);
+                } else {
+                    println!(
+                        "Delegation {}: valid={}, errors={}, warnings={}",
+                        response.display(),
+                        validation.valid,
+                        validation.errors.len(),
+                        validation.warnings.len()
+                    );
+                }
+                if !validation.valid {
+                    anyhow::bail!("delegation response validation failed");
+                }
+            }
+            PlanCommands::Aggregate {
+                plan,
+                response,
+                inventory_current,
+                output,
+                json,
+            } => {
+                let plan_content = std::fs::read_to_string(&plan)
+                    .with_context(|| format!("failed to read orchestrator plan {}", plan.display()))?;
+                let plan_value: orchestrator::plan::OrchestrationPlan =
+                    serde_yaml::from_str(&plan_content).context("invalid orchestrator plan YAML")?;
+                let response_content = std::fs::read_to_string(&response)
+                    .with_context(|| format!("failed to read delegation response {}", response.display()))?;
+                let response_value: serde_yaml::Value =
+                    serde_yaml::from_str(&response_content).context("invalid delegation response JSON/YAML")?;
+                let responses: Vec<orchestrator::delegation::DelegationResponse> =
+                    if response_value.is_sequence() {
+                        serde_yaml::from_value(response_value)?
+                    } else {
+                        vec![serde_yaml::from_value(response_value)?]
+                    };
+                let current_inventory = {
+                    let content = std::fs::read_to_string(&inventory_current)
+                        .with_context(|| format!("failed to read inventory {}", inventory_current.display()))?;
+                    serde_yaml::from_str::<orchestrator::inventory::InventorySnapshot>(&content)
+                        .context("invalid current inventory snapshot")?
+                };
+                let aggregate = orchestrator::aggregate::aggregate_plan(
+                    &plan_value,
+                    &responses,
+                    Some(&current_inventory),
+                );
+                orchestrator::aggregate::write_aggregate(&aggregate, &output)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&aggregate)?);
+                } else {
+                    println!(
+                        "Aggregate {}: status={}, targets={}, passed={}, failed={}, blocked={}, notRun={}",
+                        output.display(),
+                        aggregate.status,
+                        aggregate.targets.len(),
+                        aggregate.summary.passed,
+                        aggregate.summary.failed,
+                        aggregate.summary.blocked,
+                        aggregate.summary.not_run,
+                    );
+                }
+            }
+            PlanCommands::Schema { json: _ } => {
+                println!("{}", include_str!("../schema/orchestrator-test-plan.schema.json"));
+            }
+        },
 
         Commands::Shell {
             platform,

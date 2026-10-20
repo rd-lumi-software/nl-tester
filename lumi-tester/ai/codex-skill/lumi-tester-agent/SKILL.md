@@ -33,6 +33,16 @@ platform before selecting commands, selectors, devices, and debug artifacts:
   selectors, screenshot/pixel commands, `point` fallback, interactive desktop
   session.
 
+For HC preflight use the helper's read-only gate:
+
+```bash
+python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
+```
+
+It requires `hcHealth`, allows only `hcHealth`, `hcGetEntities`, and
+`hcGetState`, and rejects `hcControl`. HC uses `hcHealth` rather than
+`doctor`; `agent-check --platform lumi_hc` never calls `doctor`.
+
 ## Find Lumi Tester
 
 Prefer MCP tools when a `lumi-tester-mcp` server is configured. Use the MCP
@@ -572,3 +582,20 @@ Treat these as runtime/debug bugs:
   shared profiles, and TCS34725 LED blink verification.
 - Read `references/debug-artifacts.md` only when interpreting runtime files or
   building an agentic debug report.
+
+## HC Preflight Safety
+
+For `platform: lumi_hc`, `doctor` is not a readiness check. Use a canonical,
+read-only flow containing `hcHealth` (and, when needed, `hcGetEntities` and
+`hcGetState`) through:
+
+```bash
+python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
+```
+
+`agent-hc-preflight` runs `validate --json`, `list --json`, rejects
+`hcControl` and other mutating commands, then runs with
+`--report --snapshot --events-jsonl`. Use `agent-run --platform lumi_hc` only
+after the orchestrator plan and delegation response authorize mutation. A
+successful control flow is not a restore proof unless initial/final state and
+restore readback evidence are present.

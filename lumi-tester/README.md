@@ -26,6 +26,19 @@
 - **Professional Reports**: Automated HTML/JSON reports with failure context and embedded media.
 - 🛠️ **Parallel Execution**: Scale testing by running concurrently on multiple devices.
 
+### HC orchestration
+
+Inventory-driven HC plans can be validated and aggregated without moving HC
+transport into the orchestrator:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --for-run --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate-delegation plan.yaml response.json --json
+```
+
+See [docs/orchestrator.md](docs/orchestrator.md) for lifecycle, inventory
+drift, delegation, restoration, and evidence contracts.
+
 ## 📦 Installation
 
 ### AI Pack (recommended for AI agents)

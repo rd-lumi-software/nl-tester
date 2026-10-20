@@ -186,3 +186,38 @@ validate/list/run results, output directory, runtime status, evidence tier,
 and unresolved assumptions.
 
 Do not place access tokens, passwords, or secret headers in this contract.
+
+## Machine validation
+
+Use the Rust semantic validator before delegating a plan:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --for-run --json
+```
+
+The first command checks structure and returns `valid`, `readyForRun`,
+`errors`, and `warnings`. `--for-run` additionally requires safety-sensitive
+data such as a complete connection, real-control authorization, immutable
+inventory evidence, explicit mapping sources, shared stop conditions, and a
+restoration or final-state-capture contract. A plan with only an inventory ID
+but no snapshot payload is not drift-verifiable.
+
+## Machine validation and lifecycle
+
+Use `lumi-tester plan validate` for structural validation and `--for-run` for
+the mutation safety gate. The validator requires string, unique entity IDs,
+reasons for `blocked`/`skipped` targets, bounded repeats, explicit parallel
+batches, a complete real-HC endpoint or connection, a live inventory snapshot
+payload or artifact, mapping source, and an explicit captured-state restoration
+contract when restoration is enabled.
+
+Each selected target has an explicit lifecycle:
+`discovered -> eligible|blocked|skipped -> queued -> running -> passed|failed|error`.
+Shared health, discovery, inventory, or safety stops move untouched targets to
+`not_run`; post-execution failures/errors are quarantined without blocking
+independent targets.
+
+`aggregate.json` retains outcomes, repetitions, state observations, final state,
+restore status, captured latency, and artifact paths. Missing measurements stay
+null or not-captured; they are never inferred.

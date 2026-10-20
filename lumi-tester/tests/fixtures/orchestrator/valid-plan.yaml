@@ -1,0 +1,53 @@
+schemaVersion: "1"
+planId: "plan-001"
+request: "exercise one switch"
+scope: hc_only
+target:
+  platform: lumi_hc
+  profile: profiles/lumi-iot-v3.yaml
+  endpoint: "http://gateway.example.test"
+  mode: real
+inventory:
+  source: live_hc_discovery
+  snapshotId: baseline-001
+  capturedAt: "2026-10-20T10:00:00Z"
+  complete: true
+  expectedCount: 1
+  entities:
+    - entity: "entity-1"
+      capabilities: [switch]
+      fingerprint: "sha256:entity"
+      mappingFingerprint: "sha256:mapping"
+  allowlist: ["entity-1"]
+authorization:
+  real_device_control: true
+  restore_state: false
+execution:
+  repeat: 1
+  max_repeat: 2
+  mode: sequential
+  max_parallel: 1
+  delay_ms: 0
+  timeout_ms: 10000
+  final_state_capture: true
+failurePolicy:
+  scope: target
+  onTargetFailure: record_and_continue_independent_targets
+  aggregateAtEnd: true
+  stopOn: [health_failure, discovery_failure, inventory_drift, unresolved_system_safety]
+targets:
+  - entity: "entity-1"
+    capability: switch
+    status: eligible
+    mapping:
+      input_idx: 1
+      state_idx: 1
+      source: protocol_profile
+    cycles:
+      - { power: true }
+acceptance: [dispatch, readback, final_state]
+evidence:
+  report: true
+  events: true
+  snapshots: true
+  label: real_e2e

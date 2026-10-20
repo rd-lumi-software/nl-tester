@@ -118,6 +118,48 @@ the current project supports a Cloud mock, not an unqualified real Cloud claim.
 Do not turn this skill into a second Lumi runner. Do not issue raw HC control
 requests, invent command names, or write command-level YAML from memory.
 
+## Machine-verifiable orchestration gate
+
+Before delegating a plan, validate its semantic contract with the Rust
+orchestrator. Use `--for-run` only after the intake, endpoint, authorization,
+inventory, mapping, repeat, failure, evidence, and restoration decisions are
+explicit:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --for-run --json
+```
+
+After `lumi-tester-agent` returns, validate the delegation response before
+aggregating it:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate-delegation plan.yaml response.json --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan aggregate plan.yaml --response response.json --inventory-current current.json --output ./output/orchestrator --json
+```
+
+The orchestrator only validates contracts and combines evidence; it never
+calls HC directly or synthesizes a restore payload. Inventory drift or an
+unverifiable mapping is a run-level stop, while a target-local failure remains
+failed and quarantined. A response with `restore_state: false` must explicitly
+report `restoration.status: not_requested`; enabled restoration requires
+captured initial state, restore evidence, and verified final state.
+
+The machine-verifiable contract is exposed by the repo-local CLI:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --for-run --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate-delegation plan.yaml response.json --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan aggregate plan.yaml --response response.json --inventory-current inventory.json --output ./output/orchestrator --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan schema --json
+```
+
+The Rust `orchestrator` module validates plans, lifecycle transitions,
+inventory drift, delegation responses, and aggregate evidence only. It does
+not call HC HTTP/WebSocket endpoints, spawn Lumi, create command indexes, or
+synthesize restore payloads.
+
 ## Template ownership and repeated-flow policy
 
 The orchestrator owns the semantic plan; `lumi-tester-agent` owns the template
@@ -361,7 +403,8 @@ the other.
 Report these sections in order:
 
 1. Scope and environment, including real-device mutation permission and whether
-   evidence is `mock_contract`, `real_preflight`, `mixed`, or `real_e2e`.
+   evidence is `mock_contract`, `mock_conformance`, `real_preflight`, `mixed`,
+   or `real_e2e`.
 2. Discovery summary and source timestamp.
 3. Capability/mapping decisions and skipped or blocked targets.
 4. Scenario matrix: target, action, repetition, execution mode, expected state.
@@ -371,3 +414,18 @@ Report these sections in order:
 
 Do not report a test as successful merely because an HTTP request returned 2xx;
 the expected state must be verified by the readback contract.
+
+## Machine-verifiable orchestration
+
+The repository provides semantic contract checks without duplicating HC
+execution:
+
+```bash
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate plan.yaml --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan validate-delegation plan.yaml response.json --json
+cargo run --manifest-path lumi-tester/Cargo.toml -- plan aggregate plan.yaml --response response.json --output ./output/orchestrator --json
+```
+
+The aggregate preserves lifecycle outcomes, quarantine, inventory drift,
+artifact paths, evidence tier, and honest restoration status. The orchestrator
+must not call HC endpoints or synthesize unsupported restore payloads.

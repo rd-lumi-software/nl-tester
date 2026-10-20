@@ -24,6 +24,8 @@ snapshot, stop and rediscover. Do not silently reuse stale mappings.
 Use exactly one label for each result:
 
 - `mock_contract`: deterministic mock only;
+- `mock_conformance`: deterministic backend exercised against the HC contract,
+  without a live gateway;
 - `real_preflight`: real target health/discovery/state inspection, no mutation;
 - `mixed`: some components are real and another required component is mocked;
 - `real_e2e`: every required component and assertion ran against the declared
@@ -75,3 +77,15 @@ Stop the whole run before the next mutation when:
 Report targets not reached after a run-level stop as `not_run`. Do not call an
 eligible target `blocked` after it has already executed and failed an assertion
 or restore check.
+
+When restoration is disabled, aggregate `restoreStatus: not_requested`; this is
+not equivalent to restored. When restoration is enabled, the response must
+include captured initial state, a materialized typed restore flow, final-state
+readback, and `verified: true`. The orchestrator validates these artifacts but
+does not call HC or invent a restore payload.
+
+When `restore_state` is false, the aggregate must report an explicit
+not-requested restore status and retain final-state capture. When restoration
+is enabled, the response must contain captured initial state, restore evidence,
+final-state evidence, and a verified result. The Rust validator checks these
+claims; it never calls HC and never invents a cleanup value.

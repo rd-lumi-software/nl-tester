@@ -50,6 +50,18 @@ mapping, real-device safety rules, and evidence interpretation. The shared
 `validate`, `list`, `run`, report, event, and artifact-debugging workflow still
 applies; `hcHealth` is the HC readiness check in place of an App launch.
 
+Use the helper's HC-safe preflight for read-only health and discovery:
+
+```bash
+python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
+```
+
+It runs `validate --json`, `list --json`, requires `hcHealth`, rejects
+mutating commands such as `hcControl`, and then runs with report, snapshot,
+and events artifacts. `agent-run` and `agent-debug` accept `lumi_hc`, while
+`agent-doctor --platform lumi_hc` is rejected because HC readiness is proven
+by `hcHealth`; `agent-check --platform lumi_hc` never invokes `doctor`.
+
 For repeated HC work, the handoff plan is the source of truth for cycle data.
 When its template policy is `create_if_missing`, create or reuse a
 capability-specific template/generator, materialize executable canonical YAML
@@ -600,3 +612,20 @@ Treat these as runtime/debug bugs:
   shared profiles, and TCS34725 LED blink verification.
 - Read `references/debug-artifacts.md` only when interpreting runtime files or
   building an agentic debug report.
+
+## HC Preflight Safety
+
+For `platform: lumi_hc`, `doctor` is not a readiness check. Use a canonical,
+read-only flow containing `hcHealth` (and, when needed, `hcGetEntities` and
+`hcGetState`) through:
+
+```bash
+python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
+```
+
+`agent-hc-preflight` runs `validate --json`, `list --json`, rejects
+`hcControl` and other mutating commands, then runs with
+`--report --snapshot --events-jsonl`. Use `agent-run --platform lumi_hc` only
+after the orchestrator plan and delegation response authorize mutation. A
+successful control flow is not a restore proof unless initial/final state and
+restore readback evidence are present.

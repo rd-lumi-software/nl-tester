@@ -344,7 +344,15 @@ impl MultiTargetRunner {
         let generated_at = chrono::Utc::now().to_rfc3339();
         let test_results = multi_target_test_results(report, generated_at.clone());
         let mut artifact = serde_json::to_value(report)?;
-        artifact["flows"] = serde_json::to_value(&test_results.flows)?;
+        let mut flows = serde_json::to_value(&test_results.flows)?;
+        if let Some(flows) = flows.as_array_mut() {
+            for (flow, operation) in flows.iter_mut().zip(&report.operations) {
+                if let Some(evidence_tier) = operation.result.evidence_tier.as_ref() {
+                    flow["evidenceTier"] = serde_json::json!(evidence_tier);
+                }
+            }
+        }
+        artifact["flows"] = flows;
         artifact["summary"] = serde_json::to_value(&test_results.summary)?;
         artifact["generatedAt"] = serde_json::json!(generated_at);
         artifact["multiTarget"] = serde_json::to_value(&test_results.multi_target)?;

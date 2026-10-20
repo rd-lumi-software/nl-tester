@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lumi-tester.dev/schema/orchestrator-test-plan.schema.json",
+  "title": "Lumi Orchestrator Test Plan",
+  "type": "object",
+  "required": ["schemaVersion", "planId", "request", "scope", "target", "inventory", "authorization", "execution", "failurePolicy"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "planId": { "type": "string", "minLength": 1 },
+    "request": { "type": "string", "minLength": 1 },
+    "scope": { "const": "hc_only" },
+    "target": {
+      "type": "object",
+      "required": ["platform", "profile", "mode"],
+      "properties": {
+        "platform": { "const": "lumi_hc" },
+        "profile": { "type": "string", "minLength": 1 },
+        "endpoint": { "type": "string" },
+        "connection": { "type": "object" },
+        "mode": { "enum": ["real", "mock"] }
+      },
+      "additionalProperties": true
+    },
+    "inventory": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": { "const": "live_hc_discovery" },
+        "snapshotId": { "type": "string" },
+        "snapshotPath": { "type": "string" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "complete": { "type": "boolean" },
+        "expectedCount": { "type": "integer", "minimum": 0 },
+        "entities": { "type": "array" },
+        "allowlist": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "authorization": { "type": "object" },
+    "execution": { "type": "object" },
+    "failurePolicy": { "type": "object" },
+    "targets": { "type": "array" },
+    "acceptance": { "type": "array" },
+    "evidence": { "type": "object" },
+    "restoration": { "type": "object" }
+  },
+  "additionalProperties": false
+}
