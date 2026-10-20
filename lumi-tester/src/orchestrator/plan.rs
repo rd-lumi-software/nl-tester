@@ -2,7 +2,8 @@ use crate::orchestrator::inventory::InventoryEntity;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -456,12 +457,19 @@ fn validate_plan_into(
         );
     }
     if let Some(snapshot_path) = &plan.inventory.snapshot_path {
-        if !base_dir.join(snapshot_path).exists() {
+        let resolved = resolve_path(base_dir, Path::new(snapshot_path));
+        if !path_is_within(base_dir, &resolved) {
+            report.error(
+                "inventory_snapshot_outside_base_dir",
+                "/inventory/snapshotPath",
+                "inventory snapshot must remain inside the plan directory",
+            );
+        } else if !resolved.is_file() {
             report.safety(
                 for_run,
                 "inventory_snapshot_missing",
                 "/inventory/snapshotPath",
-                format!("inventory snapshot does not exist: {snapshot_path}"),
+                format!("inventory snapshot does not exist: {}", resolved.display()),
             );
         }
     }
@@ -552,6 +560,27 @@ fn validate_plan_into(
             );
         }
     }
+    if plan.failure_policy.scope != "target" {
+        report.error(
+            "invalid_failure_scope",
+            "/failurePolicy/scope",
+            "v1 orchestration requires target-scoped failure isolation",
+        );
+    }
+    if plan.failure_policy.on_target_failure != "record_and_continue_independent_targets" {
+        report.error(
+            "invalid_target_failure_policy",
+            "/failurePolicy/onTargetFailure",
+            "target failures must be recorded and quarantined while independent targets continue",
+        );
+    }
+    if !plan.failure_policy.aggregate_at_end {
+        report.error(
+            "aggregate_at_end_required",
+            "/failurePolicy/aggregateAtEnd",
+            "v1 orchestration requires aggregateAtEnd=true",
+        );
+    }
 
     let mut seen = BTreeMap::new();
     for (index, target) in plan.targets.iter().enumerate() {
@@ -563,7 +592,10 @@ fn validate_plan_into(
                 "status must be eligible, blocked, or skipped",
             );
         }
-        if seen.insert(target.entity.clone(), index).is_some() {
+        if seen
+            .insert((target.entity.clone(), target.capability.clone()), index)
+            .is_some()
+        {
             report.error(
                 "duplicate_target",
                 &format!("{path}/entity"),
@@ -625,23 +657,6 @@ fn validate_plan_into(
                     "eligible targets require a mapping source",
                 );
             }
-            for field in ["input_idx", "state_idx"] {
-                let Some(value) = target.mapping.get(field) else {
-                    report.error(
-                        "mapping_index_required",
-                        &format!("{path}/mapping/{field}"),
-                        format!("eligible targets require {field}"),
-                    );
-                    continue;
-                };
-                if value.as_i64().is_none() || value.as_i64().is_some_and(|value| value < 0) {
-                    report.error(
-                        "mapping_index_invalid",
-                        &format!("{path}/mapping/{field}"),
-                        format!("{field} must be a non-negative integer"),
-                    );
-                }
-            }
             if plan.inventory.complete
                 && !plan.inventory.allowlist.is_empty()
                 && !plan
@@ -680,6 +695,60 @@ fn validate_plan_into(
         }
     }
 
+    let eligible_entities = plan
+        .targets
+        .iter()
+        .filter(|target| target.status == "eligible")
+        .map(|target| target.entity.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if plan.execution.mode == "parallel" {
+        let mut batch_members = BTreeMap::new();
+        for (batch_index, batch) in plan.execution.parallel_batches.iter().enumerate() {
+            if batch.is_empty() {
+                report.error(
+                    "parallel_batch_empty",
+                    &format!("/execution/parallelBatches/{batch_index}"),
+                    "parallel batches must contain at least one eligible target",
+                );
+            }
+            if batch.len() > plan.execution.max_parallel as usize {
+                report.error(
+                    "parallel_batch_exceeds_limit",
+                    &format!("/execution/parallelBatches/{batch_index}"),
+                    "parallel batch size must not exceed maxParallel",
+                );
+            }
+            for (member_index, entity) in batch.iter().enumerate() {
+                if !eligible_entities.contains(entity) {
+                    report.error(
+                        "parallel_batch_target_invalid",
+                        &format!("/execution/parallelBatches/{batch_index}/{member_index}"),
+                        "parallel batches may contain only eligible target entity IDs",
+                    );
+                }
+                if batch_members
+                    .insert(entity.clone(), (batch_index, member_index))
+                    .is_some()
+                {
+                    report.error(
+                        "parallel_batch_target_duplicated",
+                        &format!("/execution/parallelBatches/{batch_index}/{member_index}"),
+                        "an eligible target must belong to exactly one independent parallel batch",
+                    );
+                }
+            }
+        }
+        for target in &eligible_entities {
+            if !batch_members.contains_key(target) {
+                report.error(
+                    "parallel_batch_membership_required",
+                    "/execution/parallelBatches",
+                    format!("eligible target {target} is missing from parallel batches"),
+                );
+            }
+        }
+    }
+
     let eligible = plan
         .targets
         .iter()
@@ -696,7 +765,11 @@ fn validate_plan_into(
         let valid_restore = plan
             .restoration
             .as_ref()
-            .map(|restoration| restoration.mode == "captured_state" && restoration.verify)
+            .map(|restoration| {
+                restoration.mode == "captured_state"
+                    && restoration.verify
+                    && restoration.final_state_capture
+            })
             .unwrap_or(false);
         if !valid_restore {
             report.error(
@@ -747,4 +820,48 @@ fn validate_plan_into(
 
 fn map_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     value.as_mapping()?.get(Value::String(key.to_string()))
+}
+
+fn resolve_path(base_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        lexical_absolute(path)
+    } else {
+        lexical_absolute(&base_dir.join(path))
+    }
+}
+
+fn path_is_within(base: &Path, candidate: &Path) -> bool {
+    let base = canonical_or_lexical(base);
+    let candidate = canonical_or_lexical(candidate);
+    candidate.starts_with(&base)
+        && !candidate
+            .components()
+            .any(|component| component == Component::ParentDir)
+}
+
+fn canonical_or_lexical(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| lexical_absolute(path))
+}
+
+fn lexical_absolute(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }

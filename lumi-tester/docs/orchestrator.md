@@ -20,6 +20,19 @@ requires an explicit endpoint/connection, authorization, complete inventory
 evidence, target mappings, shared stop conditions, and honest restoration or
 final-state-capture policy.
 
+The bundled JSON schema is the structural interchange contract. Semantic
+constraints—path containment and existence, runtime/repetition invariants,
+delegation evidence, lifecycle transitions, and restoration honesty—are
+authoritatively enforced by the Rust `plan validate` and
+`plan validate-delegation` commands.
+
+`plan aggregate` repeats the run-ready plan check and delegation validation
+before writing `aggregate.json`. Relative evidence paths are resolved from the
+response file directory and must point to existing files below `outputDir`.
+Invalid responses never produce a success aggregate. `inventory.snapshotPath`
+is resolved relative to the plan file; if no embedded or readable baseline is
+available, inventory status is `unverifiable` and the run is stopped.
+
 ## HC safety
 
 `doctor` is an app/browser/desktop dependency check. It is not HC readiness.
@@ -54,3 +67,5 @@ are `skipped`, and shared safety failures stop the remaining run.
 The aggregate report is written to `aggregate.json` and preserves target
 outcomes, lifecycle events, evidence tier, artifact paths, state observations,
 restoration status, and missing measurements without inventing values.
+Each target also carries its derived lifecycle/quarantine record, including
+shared-stop `not_run` reasons and post-execution quarantine.

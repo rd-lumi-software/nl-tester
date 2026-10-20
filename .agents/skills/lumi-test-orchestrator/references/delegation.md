@@ -34,6 +34,14 @@ ignored artifacts, but every executable flow must be validated. The agent must
 use its own command/header references and must not infer unsupported indexes or
 values.
 
+For HC, the handoff contains semantic target/cycle data; it does not contain or
+request an orchestrator-generated companion-action graph. The agent is
+responsible for composing explicit atomic commands and `runFlow` subflows. For
+example, WebSocket confirmation is represented by authored `wsSubscribe` and
+`wsExpect` commands around an authored `hcControl`, followed by an authored
+`hcWaitState` when the profile supports that API. The runner never inserts
+these commands implicitly.
+
 ## Validation and execution handoff
 
 Require the agent to return machine-readable results for:
@@ -69,7 +77,10 @@ unresolved: []
 
 The response must distinguish `passed`, `failed`, `blocked`, `error`, and
 `not_run`. Missing artifacts or unresolved assumptions must remain visible in
-the aggregate report.
+the aggregate report. An `error` response with target results is a target-local
+error that remains quarantined and does not stop independent targets; an
+`error` response without target results is a delegation-level error and stops
+the remaining run.
 
 Validate the response mechanically before aggregation:
 
@@ -85,7 +96,17 @@ indexes itself.
 
 Before aggregation, validate the response with `plan validate-delegation`.
 The validator checks plan identity, phase/status, validation result, unique
-listed command indexes, output-root containment for artifacts and generated
-flows, evidence tier, required `run.json`, restoration verification, and
-unresolved assumptions. A response cannot claim `passed` while evidence is
-incomplete.
+listed command indexes, output-root containment for flow paths, artifacts, and
+generated flows, evidence tier, required `run.json`, restoration verification,
+and unresolved assumptions. It also checks runtime status and repetition
+invariants: a run target's requested count must match `execution.repeat`,
+`passed + failed` must equal `completed`, and a passed target must complete and
+pass every requested repetition. Optional lifecycle records must have matching
+identity, transition history, and terminal state. A response cannot claim
+`passed` while evidence is incomplete, and a failed/error response that reached
+mutation still needs honest restoration evidence when restoration is enabled.
+
+`plan aggregate` repeats plan and response validation before creating the
+aggregate report. It resolves relative artifact paths from the response file's
+directory, refuses paths outside `outputDir`, and leaves no success report when
+validation fails.

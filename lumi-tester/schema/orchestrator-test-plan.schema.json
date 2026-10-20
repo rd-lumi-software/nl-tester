@@ -39,7 +39,25 @@
     "authorization": { "type": "object" },
     "execution": { "type": "object" },
     "failurePolicy": { "type": "object" },
-    "targets": { "type": "array" },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entity", "capability", "status"],
+        "properties": {
+          "entity": { "type": "string", "minLength": 1 },
+          "capability": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["eligible", "blocked", "skipped"] },
+          "name": { "type": "string" },
+          "reason": { "type": "string" },
+          "mapping": { "type": "object" },
+          "classification": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+          "actions": { "type": "array" },
+          "cycles": { "type": "array" }
+        },
+        "additionalProperties": true
+      }
+    },
     "acceptance": { "type": "array" },
     "evidence": { "type": "object" },
     "restoration": { "type": "object" }

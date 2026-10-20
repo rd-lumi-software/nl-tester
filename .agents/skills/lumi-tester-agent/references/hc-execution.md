@@ -54,7 +54,14 @@ Do not print or commit profile secrets such as `dev_key`, `nwk_key`, or
 | `hcGetEntities` | Discover live entities | Use the live result as the source of truth. |
 | `hcGetState` | Read an entity state vector | Use the entity ID as a decimal string. |
 | `hcControl` | Send indexed `{idx, value}` updates | Do not retry a control POST automatically. |
+| `wsSubscribe` | Subscribe to realtime entity events | Use only when the profile advertises realtime support. |
+| `wsExpect` | Assert an expected realtime event/state | This is an explicit flow action, not an automatic companion. |
 | `hcWaitState` | Wait for bounded state readback | A control passes only when the requested state matches. |
+
+Each row is an atomic command. The runner does not infer or insert commands
+around `hcControl`. The backend may perform its own immediate HTTP readback
+inside `hcControl`; an independent WebSocket or final HTTP confirmation must
+be authored explicitly in the flow.
 
 For the current v3 backend, discovery uses the exact route
 `GET /api/devices` without a trailing slash. Do not replace discovery with a
@@ -88,6 +95,34 @@ For a real device, the safe baseline sequence is:
       - idx: <state-idx>
         value: <expected-value>
 ```
+
+When the profile supports both realtime events and an independent final API
+readback, compose the stronger confirmation explicitly:
+
+```yaml
+- wsSubscribe:
+    entity: "<entity-id>"
+- hcControl:
+    entity: "<entity-id>"
+    state:
+      - idx: <control-idx>
+        value: true
+- wsExpect:
+    entity: "<entity-id>"
+    state:
+      - idx: <state-idx>
+        value: true
+- hcWaitState:
+    entity: "<entity-id>"
+    state:
+      - idx: <state-idx>
+        value: true
+```
+
+Put this sequence in a reusable `subflows/hc-control-confirmed.yaml` file and
+invoke it with `runFlow` when multiple scenarios need the same behavior.
+Profiles without WebSocket or a separate state API should use only the
+supported atomic commands; capability validation remains the source of truth.
 
 Read the initial state before control and restore it after the scenario unless
 the user explicitly requests a different final state. For multiple real
@@ -132,6 +167,33 @@ files. Validate and list every generated executable flow. The orchestrator owns
 the delay between generated cycle runs; do not remove a required delay merely
 to collapse files into one flow. Preserve per-cycle evidence and failure
 isolation when requested.
+
+For a future automation-rule scenario, the same composition model applies:
+
+```yaml
+- hcCreateRule:
+    when:
+      entity: "<device-a>"
+      state: { idx: <state-idx>, value: true }
+    then:
+      entity: "<device-b>"
+      state: { idx: <state-idx>, value: false }
+- hcControl:
+    entity: "<device-a>"
+    state: [{ idx: <control-idx>, value: true }]
+- wsExpect:
+    entity: "<device-b>"
+    state: [{ idx: <state-idx>, value: false }]
+- hcWaitState:
+    entity: "<device-b>"
+    state: [{ idx: <state-idx>, value: false }]
+- hcDeleteRule:
+    ruleId: "${RULE_ID}"
+```
+
+`hcCreateRule` and `hcDeleteRule` are illustrative future primitives here.
+Adding them requires normal parser/backend support first; no orchestrator
+action graph or hidden companion injection is implied.
 
 ## Preflight and execution
 

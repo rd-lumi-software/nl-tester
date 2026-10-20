@@ -129,6 +129,20 @@ control command, do not put `${cycle.value}` placeholders directly in indexed
 HC state updates. Materialize boolean, numeric, and string values before
 validation and execution.
 
+The orchestrator must not turn semantic cycles into hidden HC command graphs.
+Each HC command remains an authored atomic action. When a scenario needs
+multiple confirmation layers, `lumi-tester-agent` composes them in canonical
+YAML or a reusable `runFlow` subflow, for example:
+
+```text
+wsSubscribe -> hcControl -> wsExpect -> hcWaitState
+```
+
+`hcControl` may perform its own immediate HTTP readback inside the backend, but
+that implementation detail does not cause the runner or orchestrator to inject
+WebSocket or final-readback commands. A profile without those capabilities uses
+the supported subset and is validated normally.
+
 ## Acceptance contract
 
 Acceptance criteria must distinguish:
@@ -221,3 +235,9 @@ independent targets.
 `aggregate.json` retains outcomes, repetitions, state observations, final state,
 restore status, captured latency, and artifact paths. Missing measurements stay
 null or not-captured; they are never inferred.
+
+The aggregate also contains a lifecycle record for each target. A target-local
+failure or error ends in `failed`/`error` and is quarantined; a shared stop
+only moves untouched eligible targets to `not_run`. The orchestrator does not
+trust an agent-provided lifecycle as proof of safety; it derives the aggregate
+lifecycle from the validated outcome and stop reason.

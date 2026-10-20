@@ -1,6 +1,6 @@
 ---
 name: lumi-tester-agent
-description: Design testcase coverage, write, validate, run, and debug Lumi Tester YAML automation flows for Android, iOS, Android Auto, Web, macOS, and Windows. Use when AI (Codex, Antigravity) is asked to create test cases from requirements, generate grouped test folders, create or fix Lumi YAML tests, run Lumi Tester from a repo or installed binary, inspect validate/list/doctor/schema JSON output, debug failed commands using run.json/events.jsonl/test-results.json/screenshots/UI XML/logs, or rerun a failing command by command index.
+description: Use when AI (Codex, Antigravity) must design, write, validate, run, or debug Lumi Tester YAML flows for Android, iOS, Android Auto, Web, macOS, Windows, or a real HC gateway using platform lumi_hc; inspect validate/list/doctor/schema output, reports, evidence, screenshots, UI XML, logs, or rerun a failing command by index.
 ---
 
 # Lumi Tester Agent
@@ -34,6 +34,9 @@ platform before selecting commands, selectors, devices, and debug artifacts:
   session.
 
 For HC preflight use the helper's read-only gate:
+
+Read `references/hc-execution.md` for the HC profile, command, mapping, and
+evidence contract before authoring or running an HC flow.
 
 ```bash
 python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json

@@ -61,6 +61,16 @@ evidence:
 }
 
 #[test]
+fn orchestrator_does_not_require_hidden_hc_companion_actions() {
+    let yaml = valid_plan().replace(
+        "    cycles:\n      - { power: true }",
+        "    actions:\n      - hcControl: {power: true}",
+    );
+    let report = validate_plan_yaml(&yaml, false, Path::new("."));
+    assert!(report.valid, "{report:#?}");
+}
+
+#[test]
 fn valid_real_hc_plan_is_ready_for_run() {
     let report = validate_plan_yaml(valid_plan(), true, Path::new("."));
     assert!(report.valid, "{report:#?}");
@@ -142,10 +152,10 @@ fn parallel_execution_requires_explicit_batches() {
 }
 
 #[test]
-fn entity_ids_must_be_unique_even_when_capabilities_differ() {
+fn target_identity_is_entity_and_capability() {
     let yaml = valid_plan().replace(
         "      - { power: true }\n",
-        "      - { power: true }\n  - entity: \"entity-1\"\n    capability: dimmer\n    status: eligible\n    mapping: {input_idx: 1, state_idx: 1, source: protocol_profile}\n    cycles: [{power: true}]\n",
+        "      - { power: true }\n  - entity: \"entity-1\"\n    capability: switch\n    status: eligible\n    mapping: {input_idx: 1, state_idx: 1, source: protocol_profile}\n    cycles: [{power: true}]\n",
     );
     let report = validate_plan_yaml(&yaml, false, Path::new("."));
     assert!(!report.valid);

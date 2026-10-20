@@ -1,6 +1,6 @@
 ---
 name: lumi-tester-agent
-description: Design testcase coverage, write, validate, run, and debug Lumi Tester YAML automation flows for Android, iOS, Android Auto, Web, macOS, and Windows. Use when AI (Codex, Antigravity) is asked to create test cases from requirements, generate grouped test folders, create or fix Lumi YAML tests, run Lumi Tester from a repo or installed binary, inspect validate/list/doctor/schema JSON output, debug failed commands using run.json/events.jsonl/test-results.json/screenshots/UI XML/logs, or rerun a failing command by command index.
+description: Use when AI (Codex, Antigravity) must design, write, validate, run, or debug Lumi Tester YAML flows for Android, iOS, Android Auto, Web, macOS, Windows, or a real HC gateway using platform lumi_hc; inspect validate/list/doctor/schema output, reports, evidence, screenshots, UI XML, logs, or rerun a failing command by index.
 ---
 
 # Lumi Tester Agent
@@ -35,8 +35,11 @@ platform before selecting commands, selectors, devices, and debug artifacts:
 
 For HC preflight use the helper's read-only gate:
 
+Read `references/hc-execution.md` for the HC profile, command, mapping, and
+evidence contract before authoring or running an HC flow.
+
 ```bash
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
 ```
 
 It requires `hcHealth`, allows only `hcHealth`, `hcGetEntities`, and
@@ -95,18 +98,18 @@ iwr https://raw.githubusercontent.com/Nghi-NV/nl-tester/main/lumi-tester/scripts
 You can use the bundled helper without loading it:
 
 ```bash
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml --summary-json ./output/agent-check.json
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml --platform android --device <serial> --run --output ./output
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-validate path/to/test.yaml
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-list path/to/test.yaml
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-schema
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-doctor --platform android
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/test.yaml --platform android --device <serial> --output ./output
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/auto.yaml --platform android_auto --device <serial> --output ./output
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-debug path/to/test.yaml --platform android --device <serial> --command-index 3 --output ./output
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/desktop.yaml --platform macos --output ./output
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/desktop.yaml --platform windows --output ./output
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml --summary-json ./output/agent-check.json
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml --platform android --device <serial> --run --output ./output
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-validate path/to/test.yaml
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-list path/to/test.yaml
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-schema
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-doctor --platform android
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/test.yaml --platform android --device <serial> --output ./output
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/auto.yaml --platform android_auto --device <serial> --output ./output
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-debug path/to/test.yaml --platform android --device <serial> --command-index 3 --output ./output
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/desktop.yaml --platform macos --output ./output
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-run path/to/desktop.yaml --platform windows --output ./output
 ```
 
 The helper prefers repo-local `cargo run` and falls back to an installed
@@ -590,7 +593,7 @@ read-only flow containing `hcHealth` (and, when needed, `hcGetEntities` and
 `hcGetState`) through:
 
 ```bash
-python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
+python3 ~/.gemini/config/skills/lumi-tester-agent/scripts/lumi_agent.py agent-hc-preflight path/to/health-and-discovery.yaml --output ./output/hc-preflight --summary-json ./output/hc-preflight.json
 ```
 
 `agent-hc-preflight` runs `validate --json`, `list --json`, rejects

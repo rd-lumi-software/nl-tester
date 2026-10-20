@@ -229,3 +229,22 @@ pub fn compare_inventory(
         changes,
     }
 }
+
+pub fn unverifiable_comparison(
+    baseline_snapshot_id: &str,
+    current_snapshot_id: &str,
+    detail: impl Into<String>,
+) -> InventoryComparison {
+    InventoryComparison {
+        baseline_snapshot_id: baseline_snapshot_id.to_string(),
+        current_snapshot_id: current_snapshot_id.to_string(),
+        drifted: true,
+        unverifiable: true,
+        mapping_verifiable: false,
+        changes: vec![InventoryChange {
+            entity: "*".to_string(),
+            kind: "unverifiable".to_string(),
+            detail: detail.into(),
+        }],
+    }
+}

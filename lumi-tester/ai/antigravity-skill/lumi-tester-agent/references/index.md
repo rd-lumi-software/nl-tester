@@ -34,3 +34,5 @@ needed.
 - `desktop.md`: macOS/Windows desktop app identity, permissions, selectors,
   screenshots/pixel checks, and `desktopState.clear`.
 - `hardware.md`: hardware Jig automation, `hw*` commands, shared profiles, and TCS34725 LED blink verification.
+- `hc-execution.md`: HC gateway profile, health/discovery/control/readback,
+  restoration, and evidence rules.

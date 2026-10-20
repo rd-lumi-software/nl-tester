@@ -15,6 +15,7 @@ const SKILL_FILES: &[&str] = &[
     "references/debug-artifacts.md",
     "references/desktop.md",
     "references/hardware.md",
+    "references/hc-execution.md",
     "references/headers.csv",
     "references/index.md",
     "references/patterns.md",
@@ -47,6 +48,21 @@ impl AiClient {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
             Self::Antigravity => "Antigravity",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SkillBundle {
+    Codex,
+    Antigravity,
+}
+
+impl SkillBundle {
+    fn source_path(self) -> &'static str {
+        match self {
+            Self::Codex => "lumi-tester/ai/codex-skill/lumi-tester-agent",
+            Self::Antigravity => "lumi-tester/ai/antigravity-skill/lumi-tester-agent",
         }
     }
 }
@@ -117,6 +133,7 @@ pub async fn install(options: AiInstallOptions) -> Result<()> {
             &version,
             &options.git_ref,
             &codex_home.join("skills").join("lumi-tester-agent"),
+            SkillBundle::Codex,
             "Codex",
         )
         .await?;
@@ -127,6 +144,7 @@ pub async fn install(options: AiInstallOptions) -> Result<()> {
             &version,
             &options.git_ref,
             &claude_home.join("skills").join("lumi-tester-agent"),
+            SkillBundle::Codex,
             "Claude Code",
         )
         .await?;
@@ -139,6 +157,7 @@ pub async fn install(options: AiInstallOptions) -> Result<()> {
             &antigravity_global_home
                 .join("skills")
                 .join("lumi-tester-agent"),
+            SkillBundle::Antigravity,
             "Antigravity (global)",
         )
         .await?;
@@ -149,6 +168,7 @@ pub async fn install(options: AiInstallOptions) -> Result<()> {
             &antigravity_workspace_dir
                 .join("skills")
                 .join("lumi-tester-agent"),
+            SkillBundle::Antigravity,
             "Antigravity (workspace)",
         )
         .await?;
@@ -415,10 +435,11 @@ async fn install_skill_bundle(
     version: &str,
     git_ref: &str,
     skill_dir: &Path,
+    bundle: SkillBundle,
     label: &str,
 ) -> Result<()> {
     println!("{} Installing {} skill", "•".blue(), label);
-    let base = resolve_skill_base_url(repo, version, git_ref).await?;
+    let base = resolve_skill_base_url(repo, version, git_ref, bundle).await?;
     tokio::fs::create_dir_all(skill_dir.join("references")).await?;
     tokio::fs::create_dir_all(skill_dir.join("scripts")).await?;
     tokio::fs::create_dir_all(skill_dir.join("agents")).await?;
@@ -436,10 +457,16 @@ async fn install_skill_bundle(
     Ok(())
 }
 
-async fn resolve_skill_base_url(repo: &str, version: &str, git_ref: &str) -> Result<String> {
+async fn resolve_skill_base_url(
+    repo: &str,
+    version: &str,
+    git_ref: &str,
+    bundle: SkillBundle,
+) -> Result<String> {
     let primary = format!(
-        "{}/lumi-tester/ai/codex-skill/lumi-tester-agent",
-        raw_base_url(repo, version, git_ref)
+        "{}/{}",
+        raw_base_url(repo, version, git_ref),
+        bundle.source_path()
     );
     if version == "latest" {
         return Ok(primary);
@@ -449,8 +476,9 @@ async fn resolve_skill_base_url(repo: &str, version: &str, git_ref: &str) -> Res
         let url = format!("{}/{}", primary, file);
         if !url_exists(&url).await? {
             let fallback = format!(
-                "{}/lumi-tester/ai/codex-skill/lumi-tester-agent",
-                raw_ref_base_url(repo, git_ref)
+                "{}/{}",
+                raw_ref_base_url(repo, git_ref),
+                bundle.source_path()
             );
             eprintln!(
                 "{} Skill file {} is not available at {}; falling back to {}",

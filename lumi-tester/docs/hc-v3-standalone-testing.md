@@ -169,6 +169,46 @@ defaultTimeout: 15000
         value: false
 ```
 
+Mỗi dòng ở trên là một action nguyên tử. Runner không tự chèn action khác khi
+gặp `hcControl`. Nếu flow cần xác nhận độc lập qua WebSocket rồi đọc lại bằng
+API, hãy ghép tường minh bằng `runFlow` hoặc một subflow:
+
+```yaml
+- runFlow:
+    path: subflows/hc-control-confirmed.yaml
+    target: gateway
+```
+
+Nội dung `subflows/hc-control-confirmed.yaml` có thể là:
+
+```yaml
+platform: lumi_hc
+gateway:
+  platform: lumi_hc
+  profile: profiles/lumi-iot-v3.yaml
+---
+- wsSubscribe:
+    entity: "9007199254740993"
+- hcControl:
+    entity: "9007199254740993"
+    state:
+      - idx: 0
+        value: true
+- wsExpect:
+    entity: "9007199254740993"
+    state:
+      - idx: 0
+        value: true
+- hcWaitState:
+    entity: "9007199254740993"
+    state:
+      - idx: 0
+        value: true
+```
+
+Nếu profile không có WebSocket hoặc API readback riêng, chỉ ghép các action mà
+profile khai báo capability; không có sequence HC bắt buộc được tự động thêm.
+
 Thay các giá trị sau bằng dữ liệu thật của thiết bị:
 
 - `entity`: device ID lấy từ `hcGetEntities` hoặc API HC.
@@ -186,10 +226,14 @@ Thay các giá trị sau bằng dữ liệu thật của thiết bị:
 | `hcGetEntities` | `GET /api/devices/` |
 | `hcGetState` | `GET /api/devices/{id}/state` |
 | `hcControl` | `POST /api/devices/{id}/control`, sau đó đọc state để readback |
+| `wsSubscribe` | Mở subscription realtime; chỉ dùng khi profile có capability tương ứng |
+| `wsExpect` | Xác nhận event/state realtime theo đúng action đã viết trong flow |
 | `hcWaitState` | Đọc state có giới hạn để chờ trạng thái khớp |
 
 Vì `hcControl` đã tự kiểm tra readback, `hcWaitState` chỉ cần khi thiết bị
 thay đổi trạng thái bất đồng bộ hoặc muốn thể hiện rõ bước chờ xác nhận.
+`wsExpect` và `hcWaitState` là các action độc lập, không phải companion action
+được backend hoặc orchestrator tự chèn.
 
 ## 6. Validate, list và run
 

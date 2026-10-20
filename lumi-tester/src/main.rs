@@ -1078,6 +1078,15 @@ async fn async_main() -> anyhow::Result<()> {
                     .with_context(|| format!("failed to read orchestrator plan {}", plan.display()))?;
                 let plan_value: orchestrator::plan::OrchestrationPlan =
                     serde_yaml::from_str(&plan_content).context("invalid orchestrator plan YAML")?;
+                let plan_base_dir = plan.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let plan_validation =
+                    orchestrator::plan::validate_plan(&plan_value, true, plan_base_dir);
+                if !plan_validation.valid || !plan_validation.ready_for_run {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&plan_validation)?);
+                    }
+                    anyhow::bail!("orchestrator plan is not run-ready");
+                }
                 let response_content = std::fs::read_to_string(&response)
                     .with_context(|| format!("failed to read delegation response {}", response.display()))?;
                 let response_value: serde_yaml::Value =
@@ -1088,16 +1097,52 @@ async fn async_main() -> anyhow::Result<()> {
                     } else {
                         vec![serde_yaml::from_value(response_value)?]
                     };
+                let response_base_dir = response
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                let delegation_validations = orchestrator::delegation::validate_delegation_batch(
+                    &plan_value,
+                    &responses,
+                    response_base_dir,
+                );
+                if delegation_validations
+                    .iter()
+                    .any(|validation| !validation.valid)
+                {
+                    if json {
+                        if delegation_validations.len() == 1 {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&delegation_validations[0])?
+                            );
+                        } else {
+                            println!("{}", serde_json::to_string_pretty(&delegation_validations)?);
+                        }
+                    } else {
+                        let errors = delegation_validations
+                            .iter()
+                            .map(|validation| validation.errors.len())
+                            .sum::<usize>();
+                        println!(
+                            "Delegation validation failed: responses={}, errors={}",
+                            delegation_validations.len(),
+                            errors
+                        );
+                    }
+                    anyhow::bail!("delegation response validation failed");
+                }
                 let current_inventory = {
                     let content = std::fs::read_to_string(&inventory_current)
                         .with_context(|| format!("failed to read inventory {}", inventory_current.display()))?;
                     serde_yaml::from_str::<orchestrator::inventory::InventorySnapshot>(&content)
                         .context("invalid current inventory snapshot")?
                 };
-                let aggregate = orchestrator::aggregate::aggregate_plan(
+                let aggregate = orchestrator::aggregate::aggregate_plan_with_baseline_at(
                     &plan_value,
                     &responses,
+                    None,
                     Some(&current_inventory),
+                    plan_base_dir,
                 );
                 orchestrator::aggregate::write_aggregate(&aggregate, &output)?;
                 if json {
