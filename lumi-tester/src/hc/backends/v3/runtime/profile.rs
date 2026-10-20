@@ -111,7 +111,7 @@ pub struct V3Target {
 #[serde(rename_all = "camelCase")]
 pub struct V3Endpoint {
     pub base_url: String,
-    pub websocket_url: String,
+    pub websocket_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,15 +254,7 @@ pub fn validate_flow(
     flow_path: &Path,
     flow: &TestFlow,
 ) -> Result<V3FlowMetadata, V3ValidationError> {
-    let v3_commands = flow
-        .commands
-        .iter()
-        .filter_map(|command| match command {
-            TestCommand::V3(command) => Some(command),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let has_v3_commands = !v3_commands.is_empty();
+    let has_v3_commands = contains_v3_commands(flow_path, &flow.commands, 0)?;
 
     let gateway_component = flow
         .gateway
@@ -282,13 +274,8 @@ pub fn validate_flow(
         });
     }
 
-    for command in &flow.commands {
-        if !matches!(command, TestCommand::V3(_)) {
-            return Err(V3ValidationError::DeferredCommand {
-                command: command.display_name(),
-            });
-        }
-    }
+    let mut v3_commands = Vec::new();
+    collect_v3_commands(flow_path, &flow.commands, &mut v3_commands, 0)?;
 
     let profile_ref = flow
         .profile
@@ -312,16 +299,8 @@ pub fn validate_flow(
         }
     }
 
-    for (command, requirement) in v3_commands.iter().zip(&command_requirements) {
+    for requirement in &command_requirements {
         for capability in &requirement.capabilities {
-            if matches!(command, super::types::V3Command::HcControl(_))
-                && matches!(
-                    capability,
-                    V3Capability::DeviceState | V3Capability::RealtimeCellReadback
-                )
-            {
-                continue;
-            }
             if !loaded.profile.capabilities.contains(capability) {
                 return Err(V3ValidationError::MissingCapability {
                     capability: capability.as_str().to_string(),
@@ -331,22 +310,18 @@ pub fn validate_flow(
         }
     }
 
-    for command in &v3_commands {
-        if matches!(command, super::types::V3Command::HcControl(_))
-            && !loaded
-                .profile
-                .capabilities
-                .contains(&V3Capability::DeviceState)
-            && !loaded
-                .profile
-                .capabilities
-                .contains(&V3Capability::RealtimeCellReadback)
-        {
-            return Err(V3ValidationError::MissingCapability {
-                capability: "device_state or realtime_cell_readback".to_string(),
-                command: command.display_name().to_string(),
-            });
-        }
+    if v3_commands.iter().any(|command| {
+        matches!(
+            command,
+            super::types::V3Command::WsSubscribe(_)
+                | super::types::V3Command::WsExpect(_)
+                | super::types::V3Command::WsSnapshot(_)
+        )
+    }) && loaded.profile.endpoint.websocket_url.is_none()
+    {
+        return Err(V3ValidationError::MissingProfileField {
+            field: "endpoint.websocketUrl".to_string(),
+        });
     }
 
     Ok(V3FlowMetadata {
@@ -355,6 +330,105 @@ pub fn validate_flow(
         required_capabilities,
         command_requirements,
     })
+}
+
+fn contains_v3_commands(
+    source: &Path,
+    commands: &[TestCommand],
+    depth: usize,
+) -> Result<bool, V3ValidationError> {
+    if depth > 32 {
+        return Err(V3ValidationError::ProfileParse {
+            profile: source.display().to_string(),
+            reason: "runFlow nesting exceeds maximum depth 32".to_string(),
+        });
+    }
+
+    for command in commands {
+        match command {
+            TestCommand::V3(_) => return Ok(true),
+            TestCommand::RunFlow(params) => {
+                let params = crate::parser::flow::run_flow_params(params);
+                if let Some(inline) = params.commands.as_deref() {
+                    if contains_v3_commands(source, inline, depth + 1)? {
+                        return Ok(true);
+                    }
+                } else if let Some(path) = params.path.as_deref() {
+                    let child_path = crate::parser::flow::child_flow_path(source, path);
+                    if !child_path.is_file() {
+                        if params.optional.unwrap_or(false) {
+                            continue;
+                        }
+                        return Err(V3ValidationError::ProfileRead {
+                            profile: child_path.display().to_string(),
+                            reason: "runFlow child file was not found".to_string(),
+                        });
+                    }
+                    let child = crate::parser::yaml::parse_test_file(&child_path).map_err(|error| {
+                        V3ValidationError::ProfileParse {
+                            profile: child_path.display().to_string(),
+                            reason: error.to_string(),
+                        }
+                    })?;
+                    if contains_v3_commands(&child_path, &child.commands, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(false)
+}
+
+fn collect_v3_commands(
+    source: &Path,
+    commands: &[TestCommand],
+    output: &mut Vec<super::types::V3Command>,
+    depth: usize,
+) -> Result<(), V3ValidationError> {
+    if depth > 32 {
+        return Err(V3ValidationError::ProfileParse {
+            profile: source.display().to_string(),
+            reason: "runFlow nesting exceeds maximum depth 32".to_string(),
+        });
+    }
+    for command in commands {
+        match command {
+            TestCommand::V3(command) => output.push(command.clone()),
+            TestCommand::RunFlow(params) => {
+                let params = crate::parser::flow::run_flow_params(params);
+                if let Some(inline) = params.commands.as_deref() {
+                    collect_v3_commands(source, inline, output, depth + 1)?;
+                } else if let Some(path) = params.path.as_deref() {
+                    let child_path = crate::parser::flow::child_flow_path(source, path);
+                    if !child_path.is_file() {
+                        if params.optional.unwrap_or(false) {
+                            continue;
+                        }
+                        return Err(V3ValidationError::ProfileRead {
+                            profile: child_path.display().to_string(),
+                            reason: "runFlow child file was not found".to_string(),
+                        });
+                    }
+                    let child = crate::parser::yaml::parse_test_file(&child_path).map_err(|error| {
+                        V3ValidationError::ProfileParse {
+                            profile: child_path.display().to_string(),
+                            reason: error.to_string(),
+                        }
+                    })?;
+                    collect_v3_commands(&child_path, &child.commands, output, depth + 1)?;
+                }
+            }
+            command => {
+                return Err(V3ValidationError::DeferredCommand {
+                    command: command.display_name(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn build_profile(raw: RawProfile) -> Result<V3Profile, V3ValidationError> {
@@ -384,12 +458,13 @@ fn build_profile(raw: RawProfile) -> Result<V3Profile, V3ValidationError> {
         .ok_or_else(|| missing("endpoint"))
         .and_then(|endpoint| {
             let base_url = required_value(endpoint.base_url, "endpoint.baseUrl")?;
-            let websocket_url = required_value(endpoint.websocket_url, "endpoint.websocketUrl")?;
             validate_endpoint(&base_url, "endpoint.baseUrl", false)?;
-            validate_endpoint(&websocket_url, "endpoint.websocketUrl", true)?;
+            if let Some(websocket_url) = endpoint.websocket_url.as_deref() {
+                validate_endpoint(websocket_url, "endpoint.websocketUrl", true)?;
+            }
             Ok(V3Endpoint {
                 base_url,
-                websocket_url,
+                websocket_url: endpoint.websocket_url,
             })
         })?;
     let auth = raw
@@ -422,9 +497,7 @@ fn build_profile(raw: RawProfile) -> Result<V3Profile, V3ValidationError> {
             let max_raw_bytes = evidence
                 .max_raw_bytes
                 .ok_or_else(|| missing("evidence.maxRawBytes"))?;
-            let max_websocket_frames = evidence
-                .max_websocket_frames
-                .ok_or_else(|| missing("evidence.maxWebSocketFrames"))?;
+            let max_websocket_frames = evidence.max_websocket_frames.unwrap_or(1);
             if max_raw_bytes == 0 {
                 return Err(missing("evidence.maxRawBytes"));
             }

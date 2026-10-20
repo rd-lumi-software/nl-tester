@@ -8,6 +8,7 @@ use super::events::{ConsoleEventListener, EventEmitter, JsonlEventListener, Test
 use super::state::{CommandState, FlowState, TestSessionState};
 use crate::driver::traits::PlatformDriver;
 use crate::hardware::traits::*;
+use crate::parser::flow::{resolve_flow_path, run_flow_params, uses_inline_flow};
 use crate::parser::types::TestCommand;
 use crate::parser::yaml::{parse_commands_from_value, parse_test_file};
 use serde_json;
@@ -2412,7 +2413,7 @@ impl TestExecutor {
             TestCommand::PressHome => self.driver.home().await,
 
             TestCommand::RunFlow(params_input) => {
-                let params = params_input.clone().into_inner();
+                let params = run_flow_params(params_input);
 
                 // Check 'when' condition
                 if let Some(condition) = &params.when {
@@ -2432,11 +2433,12 @@ impl TestExecutor {
                 }
 
                 // Determine commands to run
-                let commands_to_run = if let Some(cmds) = &params.commands {
+                let commands_to_run = if uses_inline_flow(&params) {
+                    let cmds = params.commands.as_ref().expect("inline flow present");
                     Some(cmds.clone())
                 } else if let Some(ref path_str) = params.path {
                     let subst_path = self.context.substitute_vars(path_str);
-                    let flow_path = self.context.resolve_path(&subst_path);
+                    let flow_path = resolve_flow_path(&self.context.base_dir, &subst_path);
                     let commands = if let Some(cached) = self.flow_cache.get(&flow_path) {
                         cached.commands.clone()
                     } else {

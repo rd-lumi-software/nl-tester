@@ -24,7 +24,7 @@ use websocket::{HcWsAdapter, HcWsError, RealWsTransport};
 /// The V3 HTTP/WebSocket runtime used by the HC backend.
 pub struct V3Runtime {
     http: HcHttpAdapter<ReqwestHttpTransport>,
-    websocket: HcWsAdapter<RealWsTransport>,
+    websocket: Option<HcWsAdapter<RealWsTransport>>,
     entities: Vec<CanonicalEntity>,
     evidence_writer: EvidenceWriter,
     sequence: u64,
@@ -34,7 +34,7 @@ impl V3Runtime {
     pub fn new(
         loaded: &profile::LoadedV3Profile,
         base_url: String,
-        websocket_url: String,
+        websocket_url: Option<String>,
         timeout: Duration,
     ) -> AnyResult<Self> {
         if loaded.profile.retry.control_max_attempts != 0 {
@@ -54,13 +54,18 @@ impl V3Runtime {
             loaded.profile.retry.safe_http_max_attempts,
             evidence::EvidenceCollector::new(config.clone())?,
         )?;
-        let websocket = HcWsAdapter::new(
-            RealWsTransport,
-            websocket_url,
-            timeout,
-            loaded.profile.retry.websocket_reconnect_max_attempts,
-            evidence::EvidenceCollector::new(config)?,
-        )?;
+        let websocket = websocket_url
+            .map(|websocket_url| {
+                HcWsAdapter::new(
+                    RealWsTransport,
+                    websocket_url,
+                    timeout,
+                    loaded.profile.retry.websocket_reconnect_max_attempts,
+                    evidence::EvidenceCollector::new(config)
+                        .map_err(|error| HcWsError::Evidence(error.to_string()))?,
+                )
+            })
+            .transpose()?;
         Ok(Self {
             http,
             websocket,
@@ -205,26 +210,38 @@ impl V3Runtime {
     }
 
     async fn subscribe(&mut self, params: &types::V3SubscribeParams) -> std::result::Result<V3Result, V3Result> {
-        self.websocket
+        let websocket = self.websocket.as_mut().ok_or_else(|| {
+            V3Result::blocked(
+                V3Category::UnsupportedCapability,
+                "WebSocket transport is not configured for this HC profile",
+            )
+        })?;
+        websocket
             .subscribe(&params.channels)
             .await
             .map_err(ws_result)?;
+        let evidence = websocket.evidence().to_vec();
         let normalized = json!({ "channels": params.channels });
         Ok(self.pass(
             V3Category::Preflight,
             json!({ "operation": "subscribe", "channels": params.channels }),
             normalized.clone(),
             json!({ "acknowledged": true }),
-            self.websocket.evidence().to_vec(),
+            evidence,
             normalized,
         ))
     }
 
     async fn expect(&mut self, params: &V3ExpectParams) -> std::result::Result<V3Result, V3Result> {
+        let websocket = self.websocket.as_mut().ok_or_else(|| {
+            V3Result::blocked(
+                V3Category::UnsupportedCapability,
+                "WebSocket transport is not configured for this HC profile",
+            )
+        })?;
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
         let requested = requested_changes_from_event(&params.event).map_err(|error| invalid_result(error))?;
-        let response = self
-            .websocket
+        let response = websocket
             .expect_state(&entity_for(&id), &requested, Duration::from_secs(10))
             .await
             .map_err(ws_result)?;
@@ -240,9 +257,14 @@ impl V3Runtime {
     }
 
     async fn snapshot(&mut self, params: &types::V3EntityParams) -> std::result::Result<V3Result, V3Result> {
+        let websocket = self.websocket.as_mut().ok_or_else(|| {
+            V3Result::blocked(
+                V3Category::UnsupportedCapability,
+                "WebSocket transport is not configured for this HC profile",
+            )
+        })?;
         let id = parse_id(&params.entity).map_err(|error| invalid_result(error))?;
-        let response = self
-            .websocket
+        let response = websocket
             .snapshot(&entity_for(&id))
             .await
             .map_err(ws_result)?;

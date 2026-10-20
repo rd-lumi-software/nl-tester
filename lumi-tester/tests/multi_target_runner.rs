@@ -923,6 +923,7 @@ fn report_with_result(result: AdapterResult) -> lumi_tester::adapter::MultiTarge
             adapter: result.adapter.clone(),
             command: "hcHealth".into(),
             command_index: 0,
+            command_path: vec![0],
             depth: 0,
             correlation_id: "correlation-test".into(),
             repeat_index: 0,
@@ -1452,4 +1453,39 @@ impl TargetAdapter for RecordingAdapter {
         self.record("close");
         AdapterResult::passed("recording")
     }
+}
+
+#[test]
+fn runflow_inline_body_wins_over_path_and_keeps_root_rerun_index() {
+    let dir = unique_temp_dir("runflow-inline-priority");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("hc.yaml"), "mock: true\n").unwrap();
+    fs::write(
+        dir.join("child.yaml"),
+        "---\n- hcControl:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: false\n",
+    )
+    .unwrap();
+    let source = dir.join("parent.yaml");
+    fs::write(
+        &source,
+        "platform: lumi_hc\nprofile: hc.yaml\n---\n- hcControl:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: true\n- runFlow:\n    path: child.yaml\n    commands:\n      - hcWaitState:\n          entity: \"123\"\n          state:\n            - idx: 0\n              value: true\n",
+    )
+    .unwrap();
+    let flow = lumi_tester::parser::yaml::parse_test_file(&source).unwrap();
+    let normalized = normalize_flow(flow, &source).unwrap();
+    let mut runner = MultiTargetRunner::mock_harness(normalized).unwrap();
+
+    let report = runner.run().unwrap();
+
+    assert_eq!(
+        report
+            .operations
+            .iter()
+            .map(|operation| operation.command.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hcControl", "hcWaitState"]
+    );
+    assert_eq!(report.operations[1].command_index, 1);
+
+    let _ = fs::remove_dir_all(dir);
 }

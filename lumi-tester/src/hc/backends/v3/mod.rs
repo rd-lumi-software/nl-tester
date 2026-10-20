@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 use types::{
-    V3Command, V3EntityParams, V3ExpectParams, V3IndexedValue, V3StateParams,
+    V3Capability, V3Command, V3EntityParams, V3ExpectParams, V3IndexedValue, V3StateParams,
     V3SubscribeParams,
 };
 
@@ -73,7 +73,7 @@ impl V3HcProtocolBackend {
         }
     }
 
-    fn build_runtime(&self, context: &TestContext) -> Result<V3Runtime, String> {
+    fn build_runtime(&mut self, context: &TestContext) -> Result<V3Runtime, String> {
         let source_path = self
             .config
             .config
@@ -95,9 +95,24 @@ impl V3HcProtocolBackend {
             })?;
         let loaded = profile::load_profile(&source_path, profile_ref)
             .map_err(|error| format!("real HC runtime preflight is unavailable: {error}"))?;
+        self.capabilities = loaded
+            .profile
+            .capabilities
+            .iter()
+            .filter(|capability| {
+                **capability != V3Capability::RealtimeCellReadback
+                    || loaded.profile.endpoint.websocket_url.is_some()
+            })
+            .map(|capability| HcCapability::new(capability.as_str(), json!(true)))
+            .collect();
         let base_url = context.substitute_vars(&loaded.profile.endpoint.base_url);
-        let websocket_url = context.substitute_vars(&loaded.profile.endpoint.websocket_url);
-        if base_url.contains("${") || websocket_url.contains("${") {
+        let websocket_url = loaded
+            .profile
+            .endpoint
+            .websocket_url
+            .as_deref()
+            .map(|url| context.substitute_vars(url));
+        if base_url.contains("${") || websocket_url.as_deref().is_some_and(|url| url.contains("${")) {
             return Err(
                 "real HC endpoint environment is unresolved; real HC lab execution is blocked"
                     .into(),

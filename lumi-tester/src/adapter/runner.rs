@@ -2,7 +2,8 @@ use super::{
     AdapterRegistry, AdapterResult, AdapterStatus, CloudMockAdapter, SessionEvent, TargetAdapter,
     TargetScope, TargetSession,
 };
-use crate::parser::types::{NormalizedFlow, RunFlowParamsInput, TargetId, TestCommand};
+use crate::parser::flow::{child_flow_path, run_flow_params, uses_inline_flow};
+use crate::parser::types::{NormalizedFlow, TargetId, TestCommand};
 use crate::parser::validation::validate_flow_graph;
 use crate::report::types::{
     HcReadbackReport, HcReportMetadata, MultiTargetOperationReport, MultiTargetReportMetadata,
@@ -27,6 +28,8 @@ pub struct OperationRecord {
     pub adapter: String,
     pub command: String,
     pub command_index: usize,
+    #[serde(default)]
+    pub command_path: Vec<usize>,
     pub depth: usize,
     pub correlation_id: String,
     #[serde(default)]
@@ -281,7 +284,7 @@ impl MultiTargetRunner {
                         return Ok(());
                     }
                     self.current_repeat_index = repeat_index as usize;
-                    self.execute_commands(&commands, &source, sole_target, 0)
+                    self.execute_commands(&commands, &source, sole_target, 0, None, &[])
                 })
             });
         let close_results = self.session.close_all(&self.context);
@@ -390,6 +393,7 @@ impl MultiTargetRunner {
                     "correlationId": operation.correlation_id,
                     "command": operation.command,
                     "commandIndex": operation.command_index,
+                    "commandPath": operation.command_path,
                 }))?);
                 events.push('\n');
             }
@@ -419,6 +423,8 @@ impl MultiTargetRunner {
         source: &Path,
         active_target: Option<TargetId>,
         depth: usize,
+        root_command_index: Option<usize>,
+        parent_path: &[usize],
     ) -> anyhow::Result<()> {
         for (command_index, command) in commands.iter().enumerate() {
             if self.stopped {
@@ -438,8 +444,10 @@ impl MultiTargetRunner {
             {
                 continue;
             }
+            let mut command_path = parent_path.to_vec();
+            command_path.push(command_index);
             if let TestCommand::RunFlow(params) = command {
-                let params = params_ref(params);
+                let params = run_flow_params(params);
                 if let Some(condition) = params.when.as_ref() {
                     if !run_flow_condition_is_true(condition) {
                         continue;
@@ -452,12 +460,19 @@ impl MultiTargetRunner {
                     self.context.merge_vars(vars);
                 }
                 let child_result = (|| {
-                    if let Some(inline) = params.commands.as_deref() {
-                        self.execute_commands(inline, source, Some(target), depth + 1)?;
-                    }
-                    if let Some(path) = params.path.as_deref() {
-                        let child_path =
-                            source.parent().unwrap_or_else(|| Path::new(".")).join(path);
+                    if uses_inline_flow(&params) {
+                        let inline = params.commands.as_deref().expect("inline flow present");
+                        self.execute_commands(
+                            inline,
+                            source,
+                            Some(target),
+                            depth + 1,
+                            root_command_index.or(Some(command_index)),
+                            &command_path,
+                        )?;
+                    } else if let Some(path) = params.path.as_deref() {
+                        let path = self.context.substitute_vars(path);
+                        let child_path = child_flow_path(source, &path);
                         if !child_path.exists() {
                             if params.optional.unwrap_or(false) {
                                 return Ok::<(), anyhow::Error>(());
@@ -470,6 +485,8 @@ impl MultiTargetRunner {
                             &child_path,
                             Some(target),
                             depth + 1,
+                            root_command_index.or(Some(command_index)),
+                            &command_path,
                         )?;
                     }
                     Ok::<(), anyhow::Error>(())
@@ -486,13 +503,14 @@ impl MultiTargetRunner {
                 anyhow::anyhow!("command at index {command_index} has no target scope")
             })?;
             let component = &self.flow.components[&target];
+            let operation_command_index = root_command_index.unwrap_or(command_index);
             self.sequence += 1;
             let correlation_id =
                 format!("{}-{target}-{}", self.session.session_id(), self.sequence);
             let scope = TargetScope {
                 target,
                 depth,
-                command_index,
+                command_index: operation_command_index,
                 correlation_id: correlation_id.clone(),
             };
             let result = self
@@ -504,7 +522,8 @@ impl MultiTargetRunner {
                 platform: component.platform.clone(),
                 adapter: result.adapter.clone(),
                 command: command.display_name(),
-                command_index,
+                command_index: operation_command_index,
+                command_path,
                 depth,
                 correlation_id,
                 repeat_index: self.current_repeat_index,
@@ -731,9 +750,6 @@ fn find_device_id(value: &Value) -> Option<String> {
     }
 }
 
-fn params_ref(params: &RunFlowParamsInput) -> crate::parser::types::RunFlowParams {
-    params.clone().into_inner()
-}
 
 fn count_status(operations: &[OperationRecord], status: AdapterStatus) -> usize {
     operations

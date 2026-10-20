@@ -206,8 +206,7 @@ fn collect_routes(
                     stack,
                     routes,
                 )?;
-            }
-            if let (Some(path), Some(effective_target)) = (params.path.as_deref(), effective_target)
+            } else if let (Some(path), Some(effective_target)) = (params.path.as_deref(), effective_target)
             {
                 let child_path = source_path
                     .parent()

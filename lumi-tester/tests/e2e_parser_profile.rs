@@ -189,7 +189,6 @@ fn parses_valid_lumi_hc_flow_with_stable_commands_and_requirements() {
         vec![
             V3Capability::DeviceControl,
             V3Capability::DeviceState,
-            V3Capability::RealtimeCellReadback,
         ]
     );
 
@@ -524,13 +523,13 @@ profile: hc.yaml
 
     let error = validate_flow(&flow_path, &flow).unwrap_err();
     assert_eq!(error.code(), "missing_capability");
-    assert!(error.to_string().contains("readback"));
+    assert!(error.to_string().contains("device_state"));
 
     let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
-fn accepts_control_with_either_readback_capability_and_advertises_both() {
+fn rejects_control_without_http_state_even_with_realtime_capability() {
     let control_flow = r#"
 platform: lumi_hc
 journey: system_journey
@@ -543,25 +542,17 @@ profile: hc.yaml
         value: true
 "#;
 
-    for capability_to_remove in ["  - device_state\n", "  - realtime_cell_readback\n"] {
-        let dir = temp_flow_dir("control-readback-alternative");
-        let profile = VALID_PROFILE.replace(capability_to_remove, "");
-        fs::write(dir.join("hc.yaml"), profile).unwrap();
-        let flow_path = dir.join("device-control.yaml");
-        let flow = parse_yaml_content(control_flow, &flow_path).unwrap();
+    let dir = temp_flow_dir("control-readback-alternative");
+    let profile = VALID_PROFILE.replace("  - device_state\n", "");
+    fs::write(dir.join("hc.yaml"), profile).unwrap();
+    let flow_path = dir.join("device-control.yaml");
+    let flow = parse_yaml_content(control_flow, &flow_path).unwrap();
 
-        let metadata = validate_flow(&flow_path, &flow).unwrap();
-        assert_eq!(
-            metadata.command_requirements[0].capabilities,
-            vec![
-                V3Capability::DeviceControl,
-                V3Capability::DeviceState,
-                V3Capability::RealtimeCellReadback,
-            ]
-        );
+    let error = validate_flow(&flow_path, &flow).unwrap_err();
+    assert_eq!(error.code(), "missing_capability");
+    assert!(error.to_string().contains("device_state"));
 
-        let _ = fs::remove_dir_all(dir);
-    }
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -762,6 +753,11 @@ fn emits_structured_v3_cli_json() {
     assert_eq!(list_json["files"][0]["commandCount"], 8);
     assert_eq!(list_json["files"][0]["commands"][7]["name"], "wsSnapshot");
     assert!(list_json["files"][0]["requiredCapabilities"].is_array());
+    assert!(list_json["files"][0]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|command| command.get("actionContract").is_none()));
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -846,4 +842,122 @@ fn prints_human_list_errors_with_paths_and_reasons() {
 #[allow(dead_code)]
 fn _assert_typed_error(error: V3ValidationError) {
     assert!(!error.code().is_empty());
+}
+
+#[test]
+fn http_only_v3_flow_does_not_require_websocket_endpoint() {
+    let dir = temp_flow_dir("http-only-profile");
+    let profile = VALID_PROFILE
+        .replace("  websocketUrl: \"${LUMI_HC_WS_URL}\"\n", "")
+        .replace("  - realtime_cell_readback\n", "");
+    fs::write(dir.join("hc.yaml"), profile).unwrap();
+    let flow_path = dir.join("health.yaml");
+    let flow = parse_yaml_content(
+        "platform: lumi_hc\nprofile: hc.yaml\n---\n- hcHealth\n",
+        &flow_path,
+    )
+    .unwrap();
+
+    validate_flow(&flow_path, &flow).unwrap();
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn hc_control_contract_requires_http_device_state_readback() {
+    let dir = temp_flow_dir("control-http-readback-contract");
+    let profile = VALID_PROFILE.replace("  - device_state\n", "");
+    fs::write(dir.join("hc.yaml"), profile).unwrap();
+    let flow_path = dir.join("control.yaml");
+    let flow = parse_yaml_content(
+        "platform: lumi_hc\nprofile: hc.yaml\n---\n- hcControl:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: true\n",
+        &flow_path,
+    )
+    .unwrap();
+
+    let error = validate_flow(&flow_path, &flow).unwrap_err();
+    assert_eq!(error.code(), "missing_capability");
+    assert!(error.to_string().contains("device_state"));
+
+    let command = match &flow.commands[0] {
+        TestCommand::V3(command) => command,
+        command => panic!("expected V3 command, got {}", command.display_name()),
+    };
+    assert_eq!(
+        command.required_capabilities(),
+        vec![V3Capability::DeviceControl, V3Capability::DeviceState]
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn recursive_hc_profile_validation_reaches_selected_child_flow() {
+    let dir = temp_flow_dir("recursive-profile-validation");
+    let profile = VALID_PROFILE
+        .replace("  - device_state\n", "")
+        .replace("  - device_control\n", "")
+        .replace("  - realtime_cell_readback\n", "")
+        .replace("  websocketUrl: \"${LUMI_HC_WS_URL}\"\n", "");
+    fs::write(dir.join("hc.yaml"), profile).unwrap();
+    fs::write(
+        dir.join("child.yaml"),
+        "---\n- hcControl:\n    entity: \"123\"\n    state:\n      - idx: 0\n        value: true\n",
+    )
+    .unwrap();
+    let flow_path = dir.join("parent.yaml");
+    let parent_yaml = "platform: lumi_hc\nprofile: hc.yaml\n---\n- runFlow:\n    path: child.yaml\n";
+    fs::write(&flow_path, parent_yaml).unwrap();
+    let flow = parse_yaml_content(parent_yaml, &flow_path).unwrap();
+
+    let error = validate_flow(&flow_path, &flow).unwrap_err();
+    assert_eq!(error.code(), "missing_capability");
+    assert!(error.to_string().contains("hcControl"));
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lumi-tester"))
+        .args(["validate", flow_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["valid"], false);
+    assert_eq!(report["errors"][0]["code"], "missing_capability");
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn list_exposes_selected_child_commands_with_root_rerun_index() {
+    let dir = temp_flow_dir("recursive-list-identity");
+    let profile = VALID_PROFILE
+        .replace("  websocketUrl: \"${LUMI_HC_WS_URL}\"\n", "")
+        .replace("  - realtime_cell_readback\n", "");
+    fs::write(dir.join("hc.yaml"), profile).unwrap();
+    fs::write(dir.join("child.yaml"), "---\n- hcHealth\n- hcGetEntities\n").unwrap();
+    let flow_path = dir.join("parent.yaml");
+    fs::write(
+        &flow_path,
+        "platform: lumi_hc\nprofile: hc.yaml\n---\n- hcHealth\n- runFlow:\n    path: child.yaml\n",
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lumi-tester"))
+        .args(["list", flow_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let children = report["files"][0]["commands"][1]["children"]
+        .as_array()
+        .expect("runFlow children must be listed");
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0]["name"], "hcHealth");
+    assert_eq!(children[0]["index"], 0);
+    assert_eq!(report["files"][0]["commands"][1]["rerunIndex"], 1);
+    assert_eq!(children[0]["commandPath"], serde_json::json!([1, 0]));
+    assert_eq!(children[0]["rerunIndex"], 1);
+    assert_eq!(children[1]["commandPath"], serde_json::json!([1, 1]));
+    assert_eq!(children[1]["rerunIndex"], 1);
+
+    let _ = fs::remove_dir_all(dir);
 }

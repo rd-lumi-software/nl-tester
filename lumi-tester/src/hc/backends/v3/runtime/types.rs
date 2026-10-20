@@ -103,14 +103,9 @@ impl V3Command {
             Self::HcGetState(_) | Self::HcWaitState(_) => {
                 vec![V3Capability::DeviceState]
             }
-            // This is the advertised capability union for the command. The
-            // two readback entries are alternatives, not an all-of gate;
-            // validate_flow enforces the explicit device_state OR
-            // realtime_cell_readback rule for HcControl.
             Self::HcControl(_) => vec![
                 V3Capability::DeviceControl,
                 V3Capability::DeviceState,
-                V3Capability::RealtimeCellReadback,
             ],
             Self::WsSubscribe(_) | Self::WsExpect(_) | Self::WsSnapshot(_) => {
                 vec![V3Capability::RealtimeCellReadback]

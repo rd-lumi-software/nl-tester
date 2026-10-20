@@ -597,24 +597,151 @@ fn substitute_hc_command(
     let Some(context) = context else {
         return Ok(command.clone());
     };
-    let mut value = serde_json::to_value(command).map_err(|error| error.to_string())?;
-    substitute_json_strings(&mut value, context);
-    serde_json::from_value(value).map_err(|error| error.to_string())
+    use crate::hc::{HcCommand, HcStateUpdate};
+
+    let substitute_updates = |updates: &[HcStateUpdate]| {
+        updates
+            .iter()
+            .map(|update| match update {
+                HcStateUpdate::Indexed { idx, value } => {
+                    let mut value = value.clone();
+                    substitute_json_value(&mut value, context);
+                    HcStateUpdate::Indexed {
+                        idx: *idx,
+                        value,
+                    }
+                }
+                HcStateUpdate::Capability { name, value } => {
+                    let mut value = value.clone();
+                    substitute_json_value(&mut value, context);
+                    HcStateUpdate::Capability {
+                        name: context.substitute_vars(name),
+                        value,
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    Ok(match command {
+        HcCommand::Health => HcCommand::Health,
+        HcCommand::GetEntities => HcCommand::GetEntities,
+        HcCommand::GetState { entity } => HcCommand::GetState {
+            entity: context.substitute_vars(entity),
+        },
+        HcCommand::Control { entity, updates } => HcCommand::Control {
+            entity: context.substitute_vars(entity),
+            updates: substitute_updates(updates),
+        },
+        HcCommand::WaitState { entity, expected } => HcCommand::WaitState {
+            entity: context.substitute_vars(entity),
+            expected: substitute_updates(expected),
+        },
+        HcCommand::RealtimeSubscribe { channels } => HcCommand::RealtimeSubscribe {
+            channels: channels
+                .iter()
+                .map(|channel| context.substitute_vars(channel))
+                .collect(),
+        },
+        HcCommand::RealtimeExpect { entity, event } => {
+            let mut event = event.clone();
+            substitute_json_value(&mut event, context);
+            HcCommand::RealtimeExpect {
+                entity: context.substitute_vars(entity),
+                event,
+            }
+        }
+        HcCommand::RealtimeSnapshot { entity } => HcCommand::RealtimeSnapshot {
+            entity: context.substitute_vars(entity),
+        },
+    })
 }
 
-fn substitute_json_strings(value: &mut serde_json::Value, context: &TestContext) {
+fn substitute_json_value(value: &mut serde_json::Value, context: &TestContext) {
     match value {
-        serde_json::Value::String(text) => *text = context.substitute_vars(text),
+        serde_json::Value::String(text) => {
+            let original = text.clone();
+            let substituted = context.substitute_vars(&original);
+            let whole_placeholder = original.starts_with("${") && original.ends_with('}')
+                && original[2..original.len() - 1]
+                    .chars()
+                    .all(|character| character != '$' && character != '{' && character != '}');
+            if whole_placeholder {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&substituted) {
+                    *value = parsed;
+                } else {
+                    *text = substituted;
+                }
+            } else {
+                *text = substituted;
+            }
+        }
         serde_json::Value::Array(items) => {
             for item in items {
-                substitute_json_strings(item, context);
+                substitute_json_value(item, context);
             }
         }
         serde_json::Value::Object(fields) => {
             for field in fields.values_mut() {
-                substitute_json_strings(field, context);
+                substitute_json_value(field, context);
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod typed_value_tests {
+    use super::*;
+    use crate::hc::HcStateUpdate;
+    use serde_json::json;
+
+    #[test]
+    fn whole_hc_placeholders_keep_json_types_but_embedded_text_stays_string() {
+        let mut context = TestContext::new(Path::new("."), None, false, None);
+        context.set_var("enabled", "true");
+        context.set_var("level", "42");
+        context.set_var("deviceId", "123");
+        context.set_var("payload", r#"{"mode":"eco","limit":3}"#);
+        let command = crate::hc::HcCommand::Control {
+            entity: "${deviceId}".to_string(),
+            updates: vec![
+                HcStateUpdate::Indexed {
+                    idx: 0,
+                    value: json!("${enabled}"),
+                },
+                HcStateUpdate::Indexed {
+                    idx: 1,
+                    value: json!("${level}"),
+                },
+                HcStateUpdate::Indexed {
+                    idx: 2,
+                    value: json!("${payload}"),
+                },
+            ],
+        };
+
+        let substituted = substitute_hc_command(&command, Some(&context)).unwrap();
+        let crate::hc::HcCommand::Control { entity, updates } = substituted else {
+            panic!("expected control command");
+        };
+        assert_eq!(entity, "123");
+        assert_eq!(
+            updates,
+            vec![
+                HcStateUpdate::Indexed {
+                    idx: 0,
+                    value: json!(true),
+                },
+                HcStateUpdate::Indexed {
+                    idx: 1,
+                    value: json!(42),
+                },
+                HcStateUpdate::Indexed {
+                    idx: 2,
+                    value: json!({"mode": "eco", "limit": 3}),
+                },
+            ]
+        );
     }
 }

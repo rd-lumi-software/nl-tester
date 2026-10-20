@@ -776,13 +776,17 @@ async fn async_main() -> anyhow::Result<()> {
             }
             if path.is_file() {
                 let parsed = lumi_tester::parser::yaml::parse_test_file(&path)?;
-                let normalized = lumi_tester::parser::normalize::normalize_flow(parsed, &path)?;
+                let normalized = lumi_tester::parser::normalize::normalize_flow(parsed.clone(), &path)?;
                 let has_non_app_target = normalized
                     .components
                     .keys()
                     .any(|target| *target != lumi_tester::parser::types::TargetId::App);
                 if has_non_app_target {
                     lumi_tester::parser::validation::validate_flow_graph(&normalized)?;
+                    lumi_tester::hc::backends::v3::runtime::profile::validate_flow(
+                        &path,
+                        &parsed,
+                    )?;
                     let mock_mode = multi_target_mock_mode(&normalized);
                     let attached_driver = if !mock_mode {
                         if let Some(app) = normalized
@@ -1948,11 +1952,15 @@ struct ListedFlow {
 #[serde(rename_all = "camelCase")]
 struct ListedCommand {
     index: usize,
+    rerun_index: usize,
+    command_path: Vec<usize>,
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     capabilities: Option<Vec<lumi_tester::hc::backends::v3::runtime::types::V3Capability>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<lumi_tester::parser::types::TargetId>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<ListedCommand>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2064,42 +2072,9 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
     // A multi-target parent is validated by the recursive target graph. The
     // HC profile validator applies only to a file that actually contains HC
     // commands; otherwise runFlow itself is a valid orchestration command.
-    let v3_metadata = if flow
-        .commands
-        .iter()
-        .any(|command| matches!(command, lumi_tester::parser::types::TestCommand::V3(_)))
-    {
-        lumi_tester::hc::backends::v3::runtime::profile::validate_flow(path, &flow)?
-    } else {
-        lumi_tester::hc::backends::v3::runtime::profile::V3FlowMetadata {
-            profile_ref: String::new(),
-            profile_path: PathBuf::new(),
-            required_capabilities: Vec::new(),
-            command_requirements: Vec::new(),
-        }
-    };
-    let commands = flow
-        .commands
-        .iter()
-        .enumerate()
-        .map(|(index, command)| ListedCommand {
-            index,
-            name: command.display_name(),
-            capabilities: match command {
-                lumi_tester::parser::types::TestCommand::V3(v3_command) => {
-                    Some(v3_command.required_capabilities())
-                }
-                _ => None,
-            },
-            target: match command {
-                lumi_tester::parser::types::TestCommand::RunFlow(params) => {
-                    params.clone().into_inner().target
-                }
-                _ => normalized.components.keys().next().copied()
-                    .filter(|_| normalized.components.len() == 1),
-            },
-        })
-        .collect::<Vec<_>>();
+    let v3_metadata =
+        lumi_tester::hc::backends::v3::runtime::profile::validate_flow(path, &flow)?;
+    let commands = list_commands(&flow.commands, path, &normalized, &[])?;
 
     Ok(ListedFlow {
         path: path.display().to_string(),
@@ -2119,6 +2094,66 @@ fn parse_listed_flow(path: &std::path::Path) -> anyhow::Result<ListedFlow> {
         command_count: commands.len(),
         commands,
     })
+}
+
+fn list_commands(
+    commands: &[lumi_tester::parser::types::TestCommand],
+    source: &std::path::Path,
+    normalized: &lumi_tester::parser::types::NormalizedFlow,
+    parent_path: &[usize],
+) -> anyhow::Result<Vec<ListedCommand>> {
+    commands
+        .iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let mut command_path = parent_path.to_vec();
+            command_path.push(index);
+            let rerun_index = parent_path.first().copied().unwrap_or(index);
+            let (target, children) = match command {
+                lumi_tester::parser::types::TestCommand::RunFlow(params) => {
+                    let params = lumi_tester::parser::flow::run_flow_params(params);
+                    let target = params.target;
+                    let children = if let Some(inline) = params.commands.as_deref() {
+                        list_commands(inline, source, normalized, &command_path)?
+                    } else if let Some(path) = params.path.as_deref() {
+                        let child_path = lumi_tester::parser::flow::child_flow_path(source, path);
+                        if !child_path.is_file() {
+                            if params.optional.unwrap_or(false) {
+                                Vec::new()
+                            } else {
+                                anyhow::bail!("Failed to read file: {}", child_path.display());
+                            }
+                        } else {
+                            let child = lumi_tester::parser::yaml::parse_test_file(&child_path)?;
+                            list_commands(&child.commands, &child_path, normalized, &command_path)?
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    (target, children)
+                }
+                _ => (
+                    normalized.components.keys().next().copied()
+                        .filter(|_| normalized.components.len() == 1),
+                    Vec::new(),
+                ),
+            };
+            Ok(ListedCommand {
+                index,
+                rerun_index,
+                command_path,
+                name: command.display_name(),
+                capabilities: match command {
+                    lumi_tester::parser::types::TestCommand::V3(v3_command) => {
+                        Some(v3_command.required_capabilities())
+                    }
+                    _ => None,
+                },
+                target,
+                children,
+            })
+        })
+        .collect()
 }
 
 fn print_validation_result(report: &ValidationReport, json: bool) -> anyhow::Result<()> {
