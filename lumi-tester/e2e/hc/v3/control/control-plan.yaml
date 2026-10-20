@@ -1,0 +1,138 @@
+schemaVersion: "1"
+planId: "hc-10-10-61-237-20261020-control-5x"
+request: "Điều khiển mọi entity có capability control trên HC thật, bao phủ capability đặc biệt có mapping/readback rõ, lặp 5 lần mỗi entity."
+scope: hc_only
+target:
+  platform: lumi_hc
+  profile: profiles/lumi-iot-v3.yaml
+  endpoint: "${LUMI_HC_URL}"
+  mode: real
+inventory:
+  source: live_hc_discovery
+  snapshotId: "multi-target-17792"
+  baselineSnapshotId: "multi-target-10256"
+  capturedAt: "2026-10-20T10:21:43.424402500+00:00"
+  complete: true
+  expectedCount: 6
+  allowlist:
+    - "1164515091061763905"
+    - "1164515091158932672"
+    - "1164515091158932675"
+    - "1164515091061763904"
+    - "1164515091158932673"
+    - "1164515091158932674"
+  exclusions:
+    - entity: "1164515091158932672"
+      status: skipped
+      reason: "No spec.input; event/state-only entity."
+    - entity: "1164515091158932673"
+      status: skipped
+      reason: "No spec.input; event/state-only entity."
+    - entity: "1164515091061763905"
+      capability: cct
+      status: blocked
+      reason: "spec.input/state idx 3 is declared, but live HTTP state vector has no verifiable slot 3."
+    - entity: "1164515091061763904"
+      capability: mode
+      status: blocked
+      reason: "spec.input/state idx 3 is declared, but live HTTP state vector has no verifiable slot 3."
+authorization:
+  real_device_control: true
+  restore_state: false
+execution:
+  repeat: 5
+  max_repeat: 5
+  mode: sequential
+  max_parallel: 1
+  delay_ms: 5000
+  delay_enforced_by: orchestration_wrapper_between_cycle_flows
+  flow_layout: one_cycle_per_target_flow
+  timeout_ms: 15000
+  restore_after_each_cycle: false
+  final_state_capture: true
+failurePolicy:
+  scope: target
+  onTargetFailure: record_and_continue_independent_targets
+  aggregateAtEnd: true
+  stopOn:
+    - health_failure
+    - discovery_failure
+    - inventory_drift
+    - unresolved_system_safety
+targets:
+  - entity: "1164515091061763905"
+    capability: dimmer
+    status: eligible
+    mapping:
+      power_input_idx: 1
+      power_state_idx: 1
+      dimmer_input_idx: 2
+      dimmer_state_idx: 2
+      source: live_entity_protocol_profile_and_state_baseline
+    cycles:
+      - { power: true, brightness: 30 }
+      - { power: true, brightness: 70 }
+      - { power: true, brightness: 40 }
+      - { power: true, brightness: 80 }
+      - { power: true, brightness: 50 }
+  - entity: "1164515091061763904"
+    capability: rgb
+    status: eligible
+    mapping:
+      power_input_idx: 1
+      power_state_idx: 1
+      rgb_input_idx: 2
+      rgb_state_idx: 2
+      source: live_entity_protocol_profile_and_state_baseline
+    cycles:
+      - { power: true, rgb: "33:66:FF" }
+      - { power: true, rgb: "FF:66:33" }
+      - { power: true, rgb: "33:CC:66" }
+      - { power: true, rgb: "CC:33:FF" }
+      - { power: true, rgb: "FF:CC:33" }
+  - entity: "1164515091158932675"
+    capability: switch
+    status: eligible
+    mapping:
+      input_idx: 1
+      state_idx: 1
+      telemetry_state_idx: [2, 3, 4, 5, 6]
+      source: live_entity_protocol_profile_and_state_baseline
+    cycles:
+      - { power: true }
+      - { power: false }
+      - { power: true }
+      - { power: false }
+      - { power: true }
+  - entity: "1164515091158932674"
+    capability: switch
+    status: eligible
+    mapping:
+      input_idx: 1
+      state_idx: 1
+      telemetry_state_idx: [2, 3, 4, 5, 6]
+      source: live_entity_protocol_profile_and_state_baseline
+    cycles:
+      - { power: true }
+      - { power: false }
+      - { power: true }
+      - { power: false }
+      - { power: true }
+acceptance:
+  - hcHealth passes before target control
+  - live discovery remains complete and target ID remains present
+  - each control request is dispatched without automatic mutation retry
+  - each requested mapped field matches HC readback
+  - final state is captured; no restoration is attempted by explicit policy
+evidence:
+  report: true
+  events: true
+  snapshots: true
+  label: real_e2e
+  redaction:
+    - dev_key
+    - nwk_key
+    - app_key
+    - authorization
+    - cookie
+    - token

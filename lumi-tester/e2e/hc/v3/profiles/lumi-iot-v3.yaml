@@ -1,0 +1,40 @@
+mode: real
+implementation: lumi_iot_v3_home_controller
+protocolPack: lumi_iot_v3_home_controller
+protocolVersion: "0.2.0"
+packVersion: "0.1.0"
+
+target:
+  chip: ssd202d
+  firmware: unknown
+
+endpoint:
+  baseUrl: "${LUMI_HC_URL}"
+  websocketUrl: "${LUMI_HC_WS_URL}"
+
+auth:
+  mode: none
+
+capabilities:
+  - health
+  - device_discovery
+  - device_state
+  - device_control
+  - realtime_cell_readback
+
+evidence:
+  root: output/hc-v3
+  maxRawBytes: 4096
+  maxWebSocketFrames: 32
+  redactFields:
+    - dev_key
+    - nwk_key
+    - app_key
+    - authorization
+    - cookie
+    - token
+
+retry:
+  safeHttpMaxAttempts: 3
+  controlMaxAttempts: 0
+  websocketReconnectMaxAttempts: 1

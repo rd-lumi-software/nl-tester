@@ -1,6 +1,6 @@
 ---
 name: lumi-tester-agent
-description: Design testcase coverage, write, validate, run, and debug Lumi Tester YAML automation flows for Android, iOS, Android Auto, Web, macOS, and Windows. Use when AI (Codex, Antigravity) is asked to create test cases from requirements, generate grouped test folders, create or fix Lumi YAML tests, run Lumi Tester from a repo or installed binary, inspect validate/list/doctor/schema JSON output, debug failed commands using run.json/events.jsonl/test-results.json/screenshots/UI XML/logs, or rerun a failing command by command index.
+description: Use when AI (Codex, Antigravity) must design, write, validate, run, or debug Lumi Tester YAML flows for Android, iOS, Android Auto, Web, macOS, Windows, or a real HC gateway using platform lumi_hc; inspect validate/list/doctor/schema output, reports, evidence, screenshots, UI XML, logs, or rerun a failing command by index.
 ---
 
 # Lumi Tester Agent
@@ -32,6 +32,32 @@ platform before selecting commands, selectors, devices, and debug artifacts:
   foreground window, `text`/`id`/`description`/`role`/`type` best-effort
   selectors, screenshot/pixel commands, `point` fallback, interactive desktop
   session.
+- HC gateway: `platform: lumi_hc`, a gateway profile with HTTP/WebSocket
+  endpoints, entity discovery/state/control commands, indexed input/state
+  mappings, and raw/normalized HC evidence. HC has no app identity, UI
+  selectors, or App PlatformDriver; read `references/hc-execution.md` before
+  authoring or running a real HC flow.
+
+HC is an execution target in this skill. Cross-device test planning, capability
+suite generation, App-to-Cloud-to-HC orchestration, and deciding which product
+behaviors to cover belong to a higher-level orchestrator, not this skill.
+
+## HC Platform Execution
+
+When the target is `lumi_hc`, follow `references/hc-execution.md` for the
+profile shape, endpoint environment variables, discovery route, command
+mapping, real-device safety rules, and evidence interpretation. The shared
+`validate`, `list`, `run`, report, event, and artifact-debugging workflow still
+applies; `hcHealth` is the HC readiness check in place of an App launch.
+
+For repeated HC work, the handoff plan is the source of truth for cycle data.
+When its template policy is `create_if_missing`, create or reuse a
+capability-specific template/generator, materialize executable canonical YAML
+with literal typed values, and place generated flows under the requested output
+or an ignored generated directory. Do not leave duplicated hand-authored
+`cycle-N` YAML files in maintained source just because the plan has multiple
+cycles. Keep per-cycle artifacts when evidence or target quarantine requires
+them.
 
 ## Find Lumi Tester
 
@@ -126,32 +152,34 @@ and exits with the Lumi command exit code.
    still unclear.
 8. Read `references/testcase-design.md` before generating a suite from product
    requirements, user stories, screenshots, API specs, or exploratory findings.
-9. Read `references/patterns.md` when the request matches a common workflow
+9. For repeated HC suites, read `references/hc-execution.md` and apply its
+   template/materialization rules before creating multiple flows.
+10. Read `references/patterns.md` when the request matches a common workflow
    such as login, onboarding, search, settings, permission, GPS, or web form.
-10. Read `references/android-auto.md` for Android Auto DHU tests.
-11. Read `references/desktop.md` for native macOS or Windows desktop app tests.
-12. For device-backed or desktop-backed requests, confirm the target device/app,
+11. Read `references/android-auto.md` for Android Auto DHU tests.
+12. Read `references/desktop.md` for native macOS or Windows desktop app tests.
+13. For device-backed or desktop-backed requests, confirm the target device/app,
    local desktop host/app, or browser before writing or running a flow. If the
    user says "current app", inspect current focus/frontmost app instead of
    assuming an appId from an existing YAML file.
-13. Discover the app identity before launch: Android package, iOS bundle id,
+14. Discover the app identity before launch: Android package, iOS bundle id,
    Web URL/browser target, macOS `.app` path/bundle id, or Windows executable
    path.
-14. After `launchApp`, wait for a stable screen element with `waitUntilVisible`
+15. After `launchApp`, wait for a stable screen element with `waitUntilVisible`
    or `waitSee`; do not use a fixed delay as launch readiness. Android Auto is
    the exception because DHU has no UI hierarchy; use bounded `wait` plus
    screenshot/log assertions there.
-15. **Before writing `tap`/`see`/any selector-based command for a screen not
+16. **Before writing `tap`/`see`/any selector-based command for a screen not
    already inspected in this flow, inspect it first** - use a running
    Inspector, `suggest_selectors`, or a `--snapshot` run to see the real
    hierarchy. Do not guess a selector from a variable name, a screenshot
    alone, or a similar-looking screen elsewhere in the app; wrong guesses cost
    more retries than one inspect pass. See `references/selector-discovery.md`.
-16. Write YAML in canonical `header --- commands` format.
-17. Run validation before any device/browser/desktop execution.
-18. Use `list --json` to discover command indexes.
-19. Run with reports, snapshots, and event JSONL for debug-friendly artifacts.
-20. On failure, inspect artifacts and rerun the smallest failing command index.
+17. Write YAML in canonical `header --- commands` format.
+18. Run validation before any device/browser/desktop execution.
+19. Use `list --json` to discover command indexes.
+20. Run with reports, snapshots, and event JSONL for debug-friendly artifacts.
+21. On failure, inspect artifacts and rerun the smallest failing command index.
 
 ## Preflight Before Running
 

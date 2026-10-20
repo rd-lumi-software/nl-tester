@@ -1,0 +1,24 @@
+platform: lumi_hc
+gateway:
+  platform: lumi_hc
+  profile: ../profiles/lumi-iot-v3.yaml
+tags:
+  - hc
+  - real_preflight
+  - state_baseline
+defaultTimeout: 15000
+---
+- hcHealth
+- hcGetEntities
+- hcGetState:
+    entity: "1164515091061763905"
+- hcGetState:
+    entity: "1164515091158932672"
+- hcGetState:
+    entity: "1164515091158932675"
+- hcGetState:
+    entity: "1164515091061763904"
+- hcGetState:
+    entity: "1164515091158932673"
+- hcGetState:
+    entity: "1164515091158932674"

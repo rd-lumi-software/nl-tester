@@ -1,5 +1,10 @@
 command,aliases,category,purpose,param_shape,required_fields,common_fields,selector_supported,platforms,example,notes
 launchApp,open,app_lifecycle,Launch app or open configured web URL/string app path,string|object,,appId|url|clearState|permissions|label,no,android|android_auto|ios|web|macos|windows,- launchApp,Use at start of most flows; desktop clearState uses desktopState.clear planning
+hcHealth,,hc,Check HC gateway health/readiness,none,,,,lumi_hc,- hcHealth,Run before real HC control
+hcGetEntities,,hc,Discover live HC entities,none,,,,lumi_hc,- hcGetEntities,Uses the exact v3 discovery route /api/devices
+hcGetState,,hc,Read an entity state vector,object,entity,,no,lumi_hc,"- hcGetState: { entity: ""123"" }",Keep the entity ID as a decimal string
+hcControl,,hc,Send explicit indexed entity control updates,object,entity|state,,no,lumi_hc,"- hcControl: { entity: ""123"", state: [{ idx: 0, value: true }] }",Do not retry a control POST automatically
+hcWaitState,,hc,Wait for indexed entity state readback,object,entity|state,,no,lumi_hc,"- hcWaitState: { entity: ""123"", state: [{ idx: 0, value: true }] }",A control passes only when the readback matches
 stopApp,stop,app_lifecycle,Stop app under test,none,,,,android|android_auto|ios|macos|windows,- stopApp,
 installApp,,app_lifecycle,Install app package/string app path,string,path,,,android|ios|macos|windows,- installApp: ./app.apk,macOS accepts .app paths; Windows starts the executable path
 uninstallApp,,app_lifecycle,Uninstall app by package id,string,packageId,,,android|ios,- uninstallApp: com.example.app,

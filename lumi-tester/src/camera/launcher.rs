@@ -17,7 +17,9 @@ impl CameraLauncherConfig {
         let rtsp = env_file.as_deref().and_then(read_camera_rtsp);
         let profile = find_first_matching_file(&root, |path| {
             path.extension().is_some_and(|ext| ext == "json")
-                && path.to_string_lossy().contains("/profiles/")
+                && path
+                    .components()
+                    .any(|component| component.as_os_str() == "profiles")
                 && path
                     .file_name()
                     .is_some_and(|name| name.to_string_lossy().contains("camera"))

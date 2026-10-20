@@ -1,5 +1,6 @@
 use crate::runner::state::{FlowStateReport, TestSummary};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Test results for report generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +10,63 @@ pub struct TestResults {
     pub flows: Vec<FlowStateReport>,
     pub summary: TestSummary,
     pub generated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_target: Option<MultiTargetReportMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiTargetReportMetadata {
+    pub operation_count: u32,
+    pub repeat_count: u32,
+    pub adapters: Vec<String>,
+    pub operations: Vec<MultiTargetOperationReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hc: Option<HcReportMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiTargetOperationReport {
+    pub sequence: usize,
+    pub target: String,
+    pub platform: String,
+    pub adapter: String,
+    pub command: String,
+    pub command_index: usize,
+    pub repeat_index: usize,
+    pub status: String,
+    pub category: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalized_evidence: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_evidence: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HcReportMetadata {
+    pub device_ids: Vec<String>,
+    pub readbacks: Vec<HcReadbackReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HcReadbackReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    pub repeat_index: usize,
+    pub command: String,
+    pub command_index: usize,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Value>,
+    pub message: String,
 }
 
 /// Standard Session Report matching the specification in "Phần mềm - Tool test thiết bị.md"

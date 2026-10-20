@@ -164,6 +164,7 @@ mod tests {
                 total_duration_ms: Some(3500),
             },
             generated_at: "2023-01-01 12:00:00".to_string(),
+            multi_target: None,
         };
 
         let xml = generate_junit_xml(&results).expect("Failed to generate XML");

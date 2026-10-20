@@ -1,0 +1,11 @@
+platform: lumi_hc
+gateway:
+  platform: lumi_hc
+  profile: ../profiles/lumi-iot-v3.yaml
+tags:
+  - hc
+  - real_preflight
+defaultTimeout: 15000
+---
+- hcHealth
+- hcGetEntities

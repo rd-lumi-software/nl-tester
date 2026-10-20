@@ -2532,6 +2532,7 @@ mod tests {
         let results = TestResults {
             session_id: "session_test".to_string(),
             generated_at: "2026-09-11 00:00:00".to_string(),
+            multi_target: None,
             summary: TestSummary {
                 session_id: "session_test".to_string(),
                 total_flows: 1,

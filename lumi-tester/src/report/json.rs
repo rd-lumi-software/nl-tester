@@ -158,6 +158,7 @@ pub fn generate_standard_session_report(
         flows: report_data.flows.clone(),
         summary: report_data.summary.clone(),
         generated_at: chrono::Utc::now().to_rfc3339(),
+        multi_target: None,
     };
 
     let mut standard_report = StandardSessionReport::from(&test_results);
@@ -198,6 +199,7 @@ mod tests {
                 total_duration_ms: Some(135500),
             },
             generated_at: "2026-07-22T10:02:15.500Z".to_string(),
+            multi_target: None,
         };
 
         let std_report = StandardSessionReport::from(&results);
@@ -264,6 +266,7 @@ mod tests {
                 total_duration_ms: Some(3500),
             },
             generated_at: "2026-07-22T10:02:15.500Z".to_string(),
+            multi_target: None,
         };
 
         let std_report = StandardSessionReport::from(&results);
@@ -344,6 +347,7 @@ mod tests {
                 total_duration_ms: Some(200),
             },
             generated_at: "2026-07-28T10:00:00.000Z".to_string(),
+            multi_target: None,
         };
 
         generate(&results, Some(&file_path)).await.unwrap();

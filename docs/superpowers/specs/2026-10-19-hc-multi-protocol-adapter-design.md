@@ -103,7 +103,7 @@ YAML is enabled only when a backend and schema contract support it.
 The v3 backend remains responsible for:
 
 - GET /api/health_check;
-- GET /api/devices/;
+- GET /api/devices;
 - GET /api/devices/{id}/state;
 - POST /api/devices/{id}/control with indexed {idx, value} updates;
 - WebSocket subscription/readback;

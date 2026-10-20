@@ -208,7 +208,7 @@ Move or wrap existing runtime construction, profile loading, endpoint substituti
 
 ~~~text
 HcCommand::Health       -> GET /api/health_check
-HcCommand::GetEntities  -> GET /api/devices/
+HcCommand::GetEntities  -> GET /api/devices
 HcCommand::GetState     -> GET /api/devices/{id}/state
 HcCommand::Control      -> POST /api/devices/{id}/control, indexed updates only
 HcCommand::WaitState    -> bounded state polling and normalized assertion

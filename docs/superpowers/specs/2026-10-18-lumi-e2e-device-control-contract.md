@@ -58,7 +58,7 @@ một nhánh domain riêng bên trong command model và một E2E session riêng
 | Semantic | Wire fact | Trạng thái |
 | --- | --- | --- |
 | Health | GET /api/health_check; router source nest /api, health route /health_check; HTTP 200 JSON { "status": true }. | confirmed — bin/home-controller/src/transport/http/mod.rs:28-39, health.rs:7-12 |
-| Device list | device_router nest /devices, collection handler là route "/", trả ApiResponse<Vec<DeviceEntity>>. Postman/docs dùng GET /api/devices; source registration được ghép từ /api + /devices + /. | needs clarification — discrepancy path /api/devices vs /api/devices/; không khẳng định cả hai được chấp nhận nếu chưa có contract test/runtime check. |
+| Device list | device_router nest /devices, collection handler là route "/", trả ApiResponse<Vec<DeviceEntity>>. HC triển khai thực tế nhận GET /api/devices (không có slash cuối). | confirmed by live HC route check; adapter và contract test dùng /api/devices. |
 | State read | GET /api/devices/{device_id}/state; path được parse thành u64; 200 body là Vec<At0micDataValue>, không có wrapper và không có idx trong từng phần tử. | confirmed — device.rs:86, 133-141; services/devices.rs:514-524 |
 | State control | POST /api/devices/{device_id}/control; body là JSON array [{ "idx": <usize>, "value": <raw JSON> }]; handler tạo request với x-request-id tùy chọn, nhưng response thành công chỉ { "status": true }. | confirmed — device.rs:143-162; services/devices.rs:34-70; Postman collection control examples |
 | Control completion | HTTP handler gọi runtime dispatch và trả status true; không chờ physical/device ACK, không trả request ID và không có endpoint control response readback. | confirmed — services/devices.rs:448-464; correlation/readback policy vẫn phải là state/event observation. |
@@ -259,10 +259,8 @@ Source handler trả Vec<DeviceEntity>, không phải {devices:[...]}:
     ]
 
 Route registration trong source là nest("/devices", ...route("/", ...)),
-tương ứng spelling /api/devices/; tài liệu realtime và Postman ghi
-/api/devices. Đây là open question của contract pack. Contract test phải ghi
-nhận path canonical thực tế trước khi claim discovery pass; không tự coi slash
-hay không-slash là alias tương đương.
+nhưng HC triển khai thực tế nhận path canonical /api/devices; request có slash
+cuối trả 404. Adapter và contract test không tự coi hai path là alias.
 
 #### State
 
@@ -589,10 +587,9 @@ real_e2e.
 Các quyết định dưới đây được Planner chấp thuận ngày 2026-10-18 theo
 `REPORT.md` QA Round 3. Chúng khóa hành vi Phase 1 mà không sửa source v3:
 
-1. Discovery dùng source route canonical `/api/devices/`. Adapter/mock phải probe
-   đúng path này; không coi `/api/devices` và `/api/devices/` là alias tương đương
-   nếu chưa có evidence runtime/contract test. Tài liệu/Postman lệch slash là
-   caveat cần giữ trong evidence, không tự retry sang path khác.
+1. Discovery dùng route canonical thực tế `/api/devices`. Adapter/mock phải dùng
+   đúng path này; không coi `/api/devices/` là alias tương đương vì HC thực tế
+   trả 404 cho path có slash cuối.
 2. `idx` canonical là 0-based theo `At0micIdx`, vector storage và WebSocket
    snapshot. Postman example 1-based là mismatch; không auto-convert và không
    suy alias từ tên capability. Mapping phải dùng explicit wire index/pack rule.
@@ -606,10 +603,9 @@ Các quyết định dưới đây được Planner chấp thuận ngày 2026-10
 5. `websocketUrl` là profile field bắt buộc và độc lập với `baseUrl`. Thiếu field
    hoặc endpoint thì preflight `blocked`; không tự suy scheme/port.
 
-Open caveat còn lại là evidence runtime/contract fixture phải chứng minh route
-`/api/devices/` và mapping index của target fixture. Đây là acceptance evidence
-cho implementation/test, không còn là câu hỏi cần user clarification và không
-được giải quyết bằng auto-conversion.
+Open caveat còn lại là evidence runtime/contract fixture phải giữ mapping index
+của target fixture. Route discovery đã được xác nhận bằng HC thật và contract
+test; không được giải quyết bằng auto-conversion.
 
 ## 11. Nguồn đã audit
 

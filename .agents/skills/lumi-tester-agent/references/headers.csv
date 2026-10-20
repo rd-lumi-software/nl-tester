@@ -1,5 +1,5 @@
 field,aliases,type,platforms,required,example,notes
-platform,,string,all,yes,"platform: macos","Allowed values: android, android_auto, ios, web, macos, windows"
+platform,,string,all,yes,"platform: macos","Allowed values: android, android_auto, ios, web, macos, windows, lumi_hc"
 appId,app_id|string app,string,android|android_auto|ios|macos|windows,yes for app tests,"appId: /Applications/MyApp.app","Android package, Android Auto package, iOS bundle id, macOS .app path or bundle id, Windows executable path"
 url,,string,web,yes for web tests,"url: https://example.com","Use for web flows; launchApp can also take a URL/app override"
 browser,,string,web,no,"browser: chromium","Browser target for web runs"
@@ -16,3 +16,7 @@ desktopState.clear.paths,,string array,macos|windows,no,"paths: [\"~/Library/App
 desktopState.clear.keychainServices,keychainServices,string array,macos,no,"keychainServices: [\"com.example.MyApp\"]","macOS-only app-scoped Keychain service names to delete during clearState"
 desktopState.clear.registryKeys,registryKeys,string array,windows,no,"registryKeys: [\"HKCU:\\\\Software\\\\Example\"]","Windows-only current-user software registry keys; HKLM and broad keys are rejected"
 jig,jig_config,string|map,all,no,"jig: \"profiles/jig_switch_sample.yaml\"","Hardware Jig serial connection (e.g. COM5, { port: COM5, nodeId: 1, wireFormat: \"@{node} {command}\\n\", baudrate: 115200, servos: [...] }, or profile YAML path)"
+gateway,,map,lumi_hc,yes for HC tests,"gateway: { platform: lumi_hc, profile: profiles/lumi-iot-v3.yaml }","HC gateway target configuration"
+gateway.platform,,string,lumi_hc,yes for HC tests,"platform: lumi_hc","HC gateway adapter platform"
+gateway.profile,profile,string,lumi_hc,yes for HC tests,"profile: profiles/lumi-iot-v3.yaml","Path resolved relative to the flow; points to the HC backend profile"
+journey,,string,lumi_hc,no,"journey: system_journey","Optional semantic journey label for HC flows"

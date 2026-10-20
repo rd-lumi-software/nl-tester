@@ -6014,6 +6014,7 @@ impl TestExecutor {
             flows: report_data.flows.clone(),
             summary: report_data.summary.clone(),
             generated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            multi_target: None,
         };
 
         // Save JSON report (machine-readable input for `lumi-tester report` and CI tooling)

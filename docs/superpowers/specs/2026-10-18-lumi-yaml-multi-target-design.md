@@ -298,7 +298,7 @@ does not copy HC source code or import it as a dependency.
 The gateway adapter must preserve these v3 wire facts:
 
     GET  /api/health_check
-    GET  /api/devices/
+    GET  /api/devices
     GET  /api/devices/{device_id}/state
     POST /api/devices/{device_id}/control
     WS   /ws?clientId=<id>

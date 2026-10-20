@@ -33,4 +33,6 @@ needed.
   commands, and debug limits.
 - `desktop.md`: macOS/Windows desktop app identity, permissions, selectors,
   screenshots/pixel checks, and `desktopState.clear`.
+- `hc-execution.md`: HC gateway profiles, discovery/state/control commands,
+  indexed mapping, real-device safety, and HC evidence.
 - `hardware.md`: hardware Jig automation, `hw*` commands, shared profiles, and TCS34725 LED blink verification.

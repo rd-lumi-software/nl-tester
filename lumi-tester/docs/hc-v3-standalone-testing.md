@@ -72,7 +72,7 @@ Nếu HC dùng HTTPS/WebSocket bảo mật thì dùng `https://` và `wss://` t�
 
 ## 4. Profile V3
 
-Tạo `tests/hc/v3/profiles/lumi-iot-v3.yaml`:
+Tạo `e2e/hc/v3/profiles/lumi-iot-v3.yaml`:
 
 ```yaml
 implementation: lumi_iot_v3_home_controller
@@ -126,7 +126,7 @@ Không đặt `/api` vào `baseUrl`; backend tự ghép các route API.
 
 ## 5. Flow bật/tắt thiết bị
 
-Tạo `tests/hc/v3/switch-control.yaml`:
+Tạo `e2e/hc/v3/switch-control.yaml`:
 
 ```yaml
 gateway:
@@ -197,7 +197,7 @@ Chạy từ thư mục root repository:
 
 ```powershell
 cargo run --manifest-path .\lumi-tester\Cargo.toml -- validate `
-  .\lumi-tester\tests\hc\v3\switch-control.yaml --json
+  .\lumi-tester\e2e\hc\v3\switch-control.yaml --json
 ```
 
 Kết quả cần có `"valid": true`.
@@ -206,14 +206,14 @@ Xem command index trước khi chạy:
 
 ```powershell
 cargo run --manifest-path .\lumi-tester\Cargo.toml -- list `
-  .\lumi-tester\tests\hc\v3\switch-control.yaml --json
+  .\lumi-tester\e2e\hc\v3\switch-control.yaml --json
 ```
 
 Chạy test thật:
 
 ```powershell
 cargo run --manifest-path .\lumi-tester\Cargo.toml -- run `
-  .\lumi-tester\tests\hc\v3\switch-control.yaml `
+  .\lumi-tester\e2e\hc\v3\switch-control.yaml `
   --platform lumi_hc `
   --report `
   --snapshot `
@@ -228,7 +228,7 @@ Muốn lặp lại toàn bộ chu trình bật/tắt nhiều lần:
 
 ```powershell
 cargo run --manifest-path .\lumi-tester\Cargo.toml -- run `
-  .\lumi-tester\tests\hc\v3\switch-control.yaml `
+  .\lumi-tester\e2e\hc\v3\switch-control.yaml `
   --platform lumi_hc `
   --repeat 10 `
   --report `
@@ -265,7 +265,7 @@ lỗi, ví dụ command index `3`:
 
 ```powershell
 cargo run --manifest-path .\lumi-tester\Cargo.toml -- run `
-  .\lumi-tester\tests\hc\v3\switch-control.yaml `
+  .\lumi-tester\e2e\hc\v3\switch-control.yaml `
   --platform lumi_hc `
   --command-index 3 `
   --report `

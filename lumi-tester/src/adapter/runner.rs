@@ -4,10 +4,17 @@ use super::{
 };
 use crate::parser::types::{NormalizedFlow, RunFlowParamsInput, TargetId, TestCommand};
 use crate::parser::validation::validate_flow_graph;
+use crate::report::types::{
+    HcReadbackReport, HcReportMetadata, MultiTargetOperationReport, MultiTargetReportMetadata,
+    TestResults,
+};
 use crate::runner::context::TestContext;
+use crate::runner::state::{
+    CommandStateReport, CommandStatus, FlowStateReport, FlowStatus, TestSummary,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +29,8 @@ pub struct OperationRecord {
     pub command_index: usize,
     pub depth: usize,
     pub correlation_id: String,
+    #[serde(default)]
+    pub repeat_index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<PathBuf>,
     pub result: AdapterResult,
@@ -41,6 +50,8 @@ pub struct MultiTargetRunReport {
     pub blocked: usize,
     #[serde(default)]
     pub errors: usize,
+    #[serde(default = "default_repeat_count")]
+    pub repeat_count: u32,
     #[serde(default)]
     pub operations: Vec<OperationRecord>,
     #[serde(default)]
@@ -69,6 +80,11 @@ pub struct MultiTargetRunner {
     options: MultiTargetRunOptions,
     stopped: bool,
     selected_root_index: Option<usize>,
+    current_repeat_index: usize,
+}
+
+fn default_repeat_count() -> u32 {
+    1
 }
 
 impl MultiTargetRunner {
@@ -105,6 +121,7 @@ impl MultiTargetRunner {
             options: MultiTargetRunOptions::default(),
             stopped: false,
             selected_root_index: None,
+            current_repeat_index: 0,
         })
     }
 
@@ -168,6 +185,7 @@ impl MultiTargetRunner {
             options,
             stopped: false,
             selected_root_index: None,
+            current_repeat_index: 0,
         })
     }
 
@@ -198,6 +216,7 @@ impl MultiTargetRunner {
             options: MultiTargetRunOptions::default(),
             stopped: false,
             selected_root_index: None,
+            current_repeat_index: 0,
         })
     }
 
@@ -251,17 +270,20 @@ impl MultiTargetRunner {
                 .map(Some)
                 .collect()
         };
-        let run_result = records.into_iter().try_for_each(|record| {
-            if let Some(record) = record {
-                self.context.merge_vars(&record);
-            }
-            (0..repeat).try_for_each(|_| {
-                if self.stopped {
-                    return Ok(());
+        let run_result = records
+            .into_iter()
+            .try_for_each(|record| {
+                if let Some(record) = record {
+                    self.context.merge_vars(&record);
                 }
-                self.execute_commands(&commands, &source, sole_target, 0)
-            })
-        });
+                (0..repeat).try_for_each(|repeat_index| {
+                    if self.stopped {
+                        return Ok(());
+                    }
+                    self.current_repeat_index = repeat_index as usize;
+                    self.execute_commands(&commands, &source, sole_target, 0)
+                })
+            });
         let close_results = self.session.close_all(&self.context);
         run_result?;
 
@@ -302,6 +324,7 @@ impl MultiTargetRunner {
             failed,
             blocked,
             errors,
+            repeat_count: repeat,
             operations: self.operations.clone(),
             lifecycle: self.session.events().to_vec(),
         })
@@ -318,19 +341,13 @@ impl MultiTargetRunner {
         events_enabled: bool,
     ) -> anyhow::Result<()> {
         std::fs::create_dir_all(output)?;
+        let generated_at = chrono::Utc::now().to_rfc3339();
+        let test_results = multi_target_test_results(report, generated_at.clone());
         let mut artifact = serde_json::to_value(report)?;
-        artifact["flows"] =
-            serde_json::Value::Array(report.operations.iter().map(legacy_flow_artifact).collect());
-        artifact["summary"] = serde_json::json!({
-            "sessionId": report.session_id,
-            "totalFlows": report.operations.len(),
-            "totalCommands": report.operations.len(),
-            "passed": report.passed,
-            "failed": report.failed,
-            "skipped": report.blocked,
-            "totalDurationMs": null
-        });
-        artifact["generatedAt"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+        artifact["flows"] = serde_json::to_value(&test_results.flows)?;
+        artifact["summary"] = serde_json::to_value(&test_results.summary)?;
+        artifact["generatedAt"] = serde_json::json!(generated_at);
+        artifact["multiTarget"] = serde_json::to_value(&test_results.multi_target)?;
         let pretty = serde_json::to_string_pretty(&artifact)?;
         std::fs::write(output.join("run.json"), &pretty)?;
         if report_enabled {
@@ -371,10 +388,15 @@ impl MultiTargetRunner {
             std::fs::write(output.join("events.jsonl"), events)?;
         }
         if report_enabled {
-            std::fs::write(
-                output.join("report.html"),
-                format!("<!doctype html><title>Lumi multi-target report</title><h1>{:?}</h1><p>session {}</p><p>passed {} failed {} blocked {} errors {}</p>", report.status, report.session_id, report.passed, report.failed, report.blocked, report.errors),
-            )?;
+            let html = crate::report::summary_html::render_summary_html(
+                &test_results,
+                None,
+                Some("multi-target"),
+                Some("Lumi multi-target report"),
+                None,
+                output,
+            );
+            std::fs::write(output.join("report.html"), html)?;
             std::fs::write(
                 output.join("junit.xml"),
                 format!("<testsuite name=\"multi-target\" tests=\"{}\" failures=\"{}\" errors=\"{}\" skipped=\"{}\"></testsuite>", report.operations.len(), report.failed, report.errors, report.blocked),
@@ -477,6 +499,7 @@ impl MultiTargetRunner {
                 command_index,
                 depth,
                 correlation_id,
+                repeat_index: self.current_repeat_index,
                 profile: component.profile.clone(),
                 result,
             });
@@ -525,50 +548,179 @@ fn run_flow_condition_is_true(condition: &serde_json::Value) -> bool {
     }
 }
 
-fn legacy_flow_artifact(operation: &OperationRecord) -> serde_json::Value {
-    let command_status = match operation.result.status {
-        AdapterStatus::Passed => json!({ "type": "passed" }),
-        AdapterStatus::Blocked => json!({
-            "type": "skipped",
-            "reason": operation.result.message
-        }),
-        AdapterStatus::Failed | AdapterStatus::Error => json!({
-            "type": "failed",
-            "error": operation.result.message
-        }),
+fn multi_target_test_results(report: &MultiTargetRunReport, generated_at: String) -> TestResults {
+    let flows = report
+        .operations
+        .iter()
+        .map(|operation| {
+            let status = match operation.result.status {
+                AdapterStatus::Passed => CommandStatus::Passed,
+                AdapterStatus::Blocked => CommandStatus::Skipped {
+                    reason: operation.result.message.clone(),
+                },
+                AdapterStatus::Failed | AdapterStatus::Error => CommandStatus::Failed {
+                    error: operation.result.message.clone(),
+                },
+            };
+            let flow_status = if operation.result.status == AdapterStatus::Passed {
+                FlowStatus::Passed
+            } else {
+                FlowStatus::Failed
+            };
+            FlowStateReport {
+                flow_name: format!("{}:{}", operation.target, operation.command),
+                flow_path: operation
+                    .profile
+                    .as_ref()
+                    .map(|profile| profile.display().to_string())
+                    .unwrap_or_else(|| "multi-target".to_string()),
+                status: flow_status,
+                commands: vec![CommandStateReport {
+                    index: operation.command_index,
+                    command_name: operation.command.clone(),
+                    command_display: operation.command.clone(),
+                    status,
+                    duration_ms: None,
+                    screenshot_path: None,
+                    ui_hierarchy_path: None,
+                    log_path: None,
+                    retry_count: 0,
+                }],
+                total_duration_ms: None,
+                error: if operation.result.status == AdapterStatus::Passed {
+                    None
+                } else {
+                    Some(operation.result.message.clone())
+                },
+                video_path: None,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut adapters = BTreeSet::new();
+    let metadata_operations = report
+        .operations
+        .iter()
+        .enumerate()
+        .map(|(sequence, operation)| {
+            adapters.insert(operation.adapter.clone());
+            MultiTargetOperationReport {
+                sequence,
+                target: operation.target.to_string(),
+                platform: operation.platform.clone(),
+                adapter: operation.adapter.clone(),
+                command: operation.command.clone(),
+                command_index: operation.command_index,
+                repeat_index: operation.repeat_index,
+                status: adapter_status_text(operation.result.status),
+                category: operation.result.category.clone(),
+                message: operation.result.message.clone(),
+                profile: operation
+                    .profile
+                    .as_ref()
+                    .map(|profile| profile.display().to_string()),
+                evidence_tier: operation.result.evidence_tier.clone(),
+                normalized_evidence: operation.result.normalized_evidence.clone(),
+                raw_evidence: operation.result.raw_evidence.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let hc = hc_report_metadata(report);
+    let metadata = MultiTargetReportMetadata {
+        operation_count: report.operations.len() as u32,
+        repeat_count: report.repeat_count.max(1),
+        adapters: adapters.into_iter().collect(),
+        operations: metadata_operations,
+        hc,
     };
-    let flow_status = match operation.result.status {
-        AdapterStatus::Passed => json!({ "type": "passed" }),
-        AdapterStatus::Blocked => json!({ "type": "failed" }),
-        AdapterStatus::Failed | AdapterStatus::Error => json!({ "type": "failed" }),
-    };
-    json!({
-        "flowName": format!("{}:{}", operation.target, operation.command),
-        "flowPath": "multi-target",
-        "status": flow_status,
-        "commands": [{
-            "index": operation.command_index,
-            "commandName": operation.command,
-            "commandDisplay": operation.command,
-            "status": command_status,
-            "durationMs": null,
-            "screenshotPath": null,
-            "uiHierarchyPath": null,
-            "logPath": null,
-            "retryCount": 0
-        }],
-        "totalDurationMs": null,
-        "error": if operation.result.status == AdapterStatus::Passed {
-            serde_json::Value::Null
-        } else {
-            json!(operation.result.message)
+    let failed = report.failed + report.blocked + report.errors;
+    TestResults {
+        session_id: report.session_id.clone(),
+        flows,
+        summary: TestSummary {
+            session_id: report.session_id.clone(),
+            total_flows: report.operations.len() as u32,
+            total_commands: report.operations.len() as u32,
+            passed: report.passed as u32,
+            failed: failed as u32,
+            skipped: 0,
+            total_duration_ms: None,
         },
-        "videoPath": null,
-        "target": operation.target,
-        "adapter": operation.adapter,
-        "evidenceTier": operation.result.evidence_tier,
-        "correlationId": operation.correlation_id
+        generated_at,
+        multi_target: Some(metadata),
+    }
+}
+
+fn adapter_status_text(status: AdapterStatus) -> String {
+    match status {
+        AdapterStatus::Passed => "passed",
+        AdapterStatus::Failed => "failed",
+        AdapterStatus::Blocked => "blocked",
+        AdapterStatus::Error => "error",
+    }
+    .to_string()
+}
+
+fn hc_report_metadata(report: &MultiTargetRunReport) -> Option<HcReportMetadata> {
+    let hc_operations = report
+        .operations
+        .iter()
+        .filter(|operation| operation.platform == "lumi_hc" || operation.adapter == "lumi_hc")
+        .collect::<Vec<_>>();
+    if hc_operations.is_empty() {
+        return None;
+    }
+
+    let mut device_ids = BTreeSet::new();
+    let mut readbacks = Vec::new();
+    for operation in hc_operations {
+        let values = operation.result.normalized_evidence.clone();
+        let device_id = values.as_ref().and_then(find_device_id).or_else(|| {
+            operation
+                .result
+                .raw_evidence
+                .as_ref()
+                .and_then(find_device_id)
+        });
+        if let Some(device_id) = device_id.as_ref() {
+            device_ids.insert(device_id.clone());
+        }
+        if matches!(
+            operation.command.as_str(),
+            "hcGetState" | "hcControl" | "hcWaitState"
+        ) {
+            readbacks.push(HcReadbackReport {
+                device_id,
+                repeat_index: operation.repeat_index,
+                command: operation.command.clone(),
+                command_index: operation.command_index,
+                status: adapter_status_text(operation.result.status),
+                values,
+                message: operation.result.message.clone(),
+            });
+        }
+    }
+
+    Some(HcReportMetadata {
+        device_ids: device_ids.into_iter().collect(),
+        readbacks,
     })
+}
+
+fn find_device_id(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(map) => {
+            for key in ["device_id", "deviceId", "entity_id", "entityId", "entity"] {
+                if let Some(Value::String(value)) = map.get(key) {
+                    return Some(value.clone());
+                }
+            }
+            map.values().find_map(find_device_id)
+        }
+        Value::Array(values) => values.iter().find_map(find_device_id),
+        _ => None,
+    }
 }
 
 fn params_ref(params: &RunFlowParamsInput) -> crate::parser::types::RunFlowParams {
@@ -680,18 +832,18 @@ impl TargetAdapter for MockGatewayAdapter {
     fn execute(&mut self, command: &TestCommand, _scope: &TargetScope) -> AdapterResult {
         let mut world = self.world.lock().expect("mock world lock");
         let (operation, requested) = match command {
-            TestCommand::V3(
-                crate::hc::backends::v3::runtime::types::V3Command::HcControl(params),
-            ) => {
+            TestCommand::V3(crate::hc::backends::v3::runtime::types::V3Command::HcControl(
+                params,
+            )) => {
                 let requested = params.state.iter().any(|change| {
                     change.idx == 0 && serde_json::to_value(&change.value).ok() == Some(json!(true))
                 });
                 world.device_on = requested;
                 ("control", requested)
             }
-            TestCommand::V3(
-                crate::hc::backends::v3::runtime::types::V3Command::HcWaitState(params),
-            ) => {
+            TestCommand::V3(crate::hc::backends::v3::runtime::types::V3Command::HcWaitState(
+                params,
+            )) => {
                 let requested = params.state.iter().any(|change| {
                     change.idx == 0 && serde_json::to_value(&change.value).ok() == Some(json!(true))
                 });

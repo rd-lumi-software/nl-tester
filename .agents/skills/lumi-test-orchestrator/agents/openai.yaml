@@ -1,0 +1,6 @@
+interface:
+  display_name: "Lumi Test Orchestrator"
+  short_description: "Plan and coordinate Lumi test runs"
+  default_prompt: "Use $lumi-test-orchestrator to collect and confirm the complete test intake before planning a safe inventory-driven Lumi HC test, then delegate YAML authoring and execution to $lumi-tester-agent."
+policy:
+  allow_implicit_invocation: true

@@ -13,11 +13,13 @@
 //! readings, a hardcoded app version, a hardcoded "staging" environment), which
 //! this renderer deliberately does not reproduce.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
 use super::html::{format_duration, html_escape, target_name_from_session_id};
-use super::types::TestResults;
+use super::types::{
+    HcReportMetadata, MultiTargetOperationReport, MultiTargetReportMetadata, TestResults,
+};
 use crate::runner::state::{CommandStatus, FlowStatus};
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::path::Path;
 
 /// `output_dir` is the `output/<device>/` root (same directory
@@ -48,7 +50,7 @@ pub async fn generate(
         .map(|p| p.to_path_buf())
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    let html = generate_summary_html(results, app_id, platform, title, output_dir, &report_dir);
+    let html = render_summary_html(results, app_id, platform, title, output_dir, &report_dir);
 
     if let Some(path) = output {
         std::fs::write(path, html)?;
@@ -106,7 +108,11 @@ struct RunHistoryEntry {
 /// (matched via `target_name_from_session_id`, the same grouping the sessions
 /// dashboard uses), oldest first. Best-effort: any read/parse error for an
 /// individual session just skips that one entry rather than failing the report.
-fn collect_run_history(output_dir: &Path, current_session_id: &str, target_name: &str) -> Vec<RunHistoryEntry> {
+fn collect_run_history(
+    output_dir: &Path,
+    current_session_id: &str,
+    target_name: &str,
+) -> Vec<RunHistoryEntry> {
     let sessions_dir = output_dir.join("sessions");
     let mut entries = Vec::new();
 
@@ -134,13 +140,26 @@ fn collect_run_history(output_dir: &Path, current_session_id: &str, target_name:
         if target_name_from_session_id(&session_id, total_flows) != target_name {
             continue;
         }
-        let passed = summary.and_then(|s| s.get("passed")).and_then(|v| v.as_u64()).unwrap_or(0);
-        let failed = summary.and_then(|s| s.get("failed")).and_then(|v| v.as_u64()).unwrap_or(0);
-        let duration_ms = summary
-            .and_then(|s| s.get("totalDurationMs").or_else(|| s.get("total_duration_ms")))
+        let passed = summary
+            .and_then(|s| s.get("passed"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let created_at = val.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let failed = summary
+            .and_then(|s| s.get("failed"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let duration_ms = summary
+            .and_then(|s| {
+                s.get("totalDurationMs")
+                    .or_else(|| s.get("total_duration_ms"))
+            })
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let created_at = val
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         entries.push(RunHistoryEntry {
             is_current: session_id == current_session_id,
@@ -163,9 +182,21 @@ fn render_run_history(entries: &[RunHistoryEntry]) -> String {
     let mut rows = String::new();
     for (idx, e) in entries.iter().enumerate() {
         let run_no = idx + 1;
-        let (status_text, status_class) = if e.failed == 0 { ("PASS", "status-pass") } else { ("FAIL", "status-fail") };
-        let row_style = if e.is_current { " style=\"font-weight:700\"" } else { "" };
-        let current_tag = if e.is_current { " <span style=\"color:#0759b8;font-size:11px\">(phiên này)</span>" } else { "" };
+        let (status_text, status_class) = if e.failed == 0 {
+            ("PASS", "status-pass")
+        } else {
+            ("FAIL", "status-fail")
+        };
+        let row_style = if e.is_current {
+            " style=\"font-weight:700\""
+        } else {
+            ""
+        };
+        let current_tag = if e.is_current {
+            " <span style=\"color:#0759b8;font-size:11px\">(phiên này)</span>"
+        } else {
+            ""
+        };
         rows.push_str(&format!(
             r#"<tr{row_style}><td>Lần {run_no}/{total}{current_tag}</td><td>{time}</td><td><span class="status {status_class}">{status_text}</span></td><td>{passed} pass / {failed} fail</td><td>{dur}</td></tr>"#,
             row_style = row_style,
@@ -197,7 +228,7 @@ struct PieSegment {
     value: f64,
 }
 
-fn generate_summary_html(
+pub fn render_summary_html(
     results: &TestResults,
     app_id: Option<&str>,
     platform: Option<&str>,
@@ -225,23 +256,53 @@ fn generate_summary_html(
     // PartiallyPassed), so those columns are always 0 - kept in the layout for
     // fidelity with the reference format rather than dropped silently.
     let total_testcases = results.flows.len() as u32;
-    let passed_testcases = results.flows.iter().filter(|f| matches!(f.status, FlowStatus::Passed)).count() as u32;
+    let passed_testcases = results
+        .flows
+        .iter()
+        .filter(|f| matches!(f.status, FlowStatus::Passed))
+        .count() as u32;
     let failed_testcases = total_testcases.saturating_sub(passed_testcases);
     let overall_pass = failed_testcases == 0 && total_testcases > 0;
 
     let pie_segments = [
-        PieSegment { class: "chart-pass", color: "#16a34a", label: "PASSED", value: passed_testcases as f64 },
-        PieSegment { class: "chart-fail", color: "#dc2626", label: "FAILED", value: failed_testcases as f64 },
-        PieSegment { class: "chart-blocked", color: "#f59e0b", label: "BLOCKED", value: 0.0 },
-        PieSegment { class: "chart-error", color: "#7f1d1d", label: "ERROR", value: 0.0 },
-        PieSegment { class: "chart-skip", color: "#94a3b8", label: "SKIPPED", value: 0.0 },
+        PieSegment {
+            class: "chart-pass",
+            color: "#16a34a",
+            label: "PASSED",
+            value: passed_testcases as f64,
+        },
+        PieSegment {
+            class: "chart-fail",
+            color: "#dc2626",
+            label: "FAILED",
+            value: failed_testcases as f64,
+        },
+        PieSegment {
+            class: "chart-blocked",
+            color: "#f59e0b",
+            label: "BLOCKED",
+            value: 0.0,
+        },
+        PieSegment {
+            class: "chart-error",
+            color: "#7f1d1d",
+            label: "ERROR",
+            value: 0.0,
+        },
+        PieSegment {
+            class: "chart-skip",
+            color: "#94a3b8",
+            label: "SKIPPED",
+            value: 0.0,
+        },
     ];
     let pie_total: f64 = pie_segments.iter().map(|s| s.value).sum();
     let (pie_gradient, pie_labels) = render_pie(&pie_segments, pie_total);
     let legend_html = render_pie_legend(&pie_segments, pie_total);
 
     // Run index per testcase name ("Lần i/N") for flows repeated within this session.
-    let mut name_totals: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut name_totals: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for f in &results.flows {
         *name_totals.entry(f.flow_name.clone()).or_insert(0) += 1;
     }
@@ -252,16 +313,33 @@ fn generate_summary_html(
         .map(|f| {
             let seen = name_seen.entry(f.flow_name.clone()).or_insert(0);
             *seen += 1;
-            format!("Lần {}/{}", seen, name_totals.get(&f.flow_name).copied().unwrap_or(1))
+            format!(
+                "Lần {}/{}",
+                seen,
+                name_totals.get(&f.flow_name).copied().unwrap_or(1)
+            )
         })
         .collect();
 
-    let max_flow_duration = results.flows.iter().map(|f| f.total_duration_ms.unwrap_or(0)).max().unwrap_or(0);
+    let max_flow_duration = results
+        .flows
+        .iter()
+        .map(|f| f.total_duration_ms.unwrap_or(0))
+        .max()
+        .unwrap_or(0);
     let mut duration_rows = String::new();
     for (flow, run_label) in results.flows.iter().zip(run_labels.iter()) {
         let dur = flow.total_duration_ms.unwrap_or(0);
-        let pct = if max_flow_duration > 0 { (dur as f64 / max_flow_duration as f64 * 100.0).clamp(2.0, 100.0) } else { 2.0 };
-        let bar_class = if matches!(flow.status, FlowStatus::Passed) { "chart-pass" } else { "chart-fail" };
+        let pct = if max_flow_duration > 0 {
+            (dur as f64 / max_flow_duration as f64 * 100.0).clamp(2.0, 100.0)
+        } else {
+            2.0
+        };
+        let bar_class = if matches!(flow.status, FlowStatus::Passed) {
+            "chart-pass"
+        } else {
+            "chart-fail"
+        };
         duration_rows.push_str(&format!(
             r#"<div class="duration-row"><div class="duration-label">{name} <span>{run_label}</span></div><div class="duration-track"><div class="duration-bar {bar_class}" style="width:{pct:.2}%"></div></div><strong class="duration-value">{dur} ms</strong></div>"#,
             name = html_escape(&flow.flow_name),
@@ -279,10 +357,16 @@ fn generate_summary_html(
     // noise, and its absence is itself the honest signal that it isn't tracked.
     let mut env_rows = String::new();
     if let Some(app) = app_id.filter(|s| !s.is_empty()) {
-        env_rows.push_str(&format!(r#"<tr><th>Ứng dụng (App ID)</th><td>{}</td></tr>"#, html_escape(app)));
+        env_rows.push_str(&format!(
+            r#"<tr><th>Ứng dụng (App ID)</th><td>{}</td></tr>"#,
+            html_escape(app)
+        ));
     }
     if let Some(os) = platform.filter(|s| !s.is_empty()) {
-        env_rows.push_str(&format!(r#"<tr><th>Nền tảng</th><td>{}</td></tr>"#, html_escape(os)));
+        env_rows.push_str(&format!(
+            r#"<tr><th>Nền tảng</th><td>{}</td></tr>"#,
+            html_escape(os)
+        ));
     }
     if env_rows.is_empty() {
         env_rows = r#"<tr><td colspan="2" style="text-align:center;color:#64748b">Chưa có thông tin môi trường nào được thu thập cho phiên này</td></tr>"#.to_string();
@@ -302,7 +386,8 @@ fn generate_summary_html(
 
     // Pre-compute per-group pass/total so the group header can show "x/y đạt"
     // before iterating (group = flow_path).
-    let mut group_stats: std::collections::HashMap<&str, (u32, u32)> = std::collections::HashMap::new();
+    let mut group_stats: std::collections::HashMap<&str, (u32, u32)> =
+        std::collections::HashMap::new();
     for flow in &results.flows {
         let entry = group_stats.entry(flow.flow_path.as_str()).or_insert((0, 0));
         entry.1 += 1;
@@ -314,7 +399,11 @@ fn generate_summary_html(
     for (idx, (flow, run_label)) in results.flows.iter().zip(run_labels.iter()).enumerate() {
         let tc_id = format!("TC-{:02}", idx + 1);
         let is_pass = matches!(flow.status, FlowStatus::Passed);
-        let (status_text, status_class) = if is_pass { ("PASS", "status-pass") } else { ("FAIL", "status-fail") };
+        let (status_text, status_class) = if is_pass {
+            ("PASS", "status-pass")
+        } else {
+            ("FAIL", "status-fail")
+        };
         let dur = flow.total_duration_ms.unwrap_or(0);
         if !is_pass {
             failed_names.push(flow.flow_name.clone());
@@ -322,8 +411,14 @@ fn generate_summary_html(
         total_retries += flow.commands.iter().map(|c| c.retry_count).sum::<u32>();
 
         if last_group != Some(flow.flow_path.as_str()) {
-            let (gp, gt) = group_stats.get(flow.flow_path.as_str()).copied().unwrap_or((0, 0));
-            let basename = std::path::Path::new(&flow.flow_path).file_name().and_then(|n| n.to_str()).unwrap_or(&flow.flow_path);
+            let (gp, gt) = group_stats
+                .get(flow.flow_path.as_str())
+                .copied()
+                .unwrap_or((0, 0));
+            let basename = std::path::Path::new(&flow.flow_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&flow.flow_path);
             test_rows.push_str(&format!(
                 r#"<tr class="group-row"><td colspan="9" title="{full}">📁 {name} — {gp}/{gt} đạt</td></tr>"#,
                 full = html_escape(&flow.flow_path),
@@ -340,7 +435,10 @@ fn generate_summary_html(
                 _ => None,
             })
         });
-        let reason_cell = first_error.clone().map(|e| html_escape(&e)).unwrap_or_else(|| "-".to_string());
+        let reason_cell = first_error
+            .clone()
+            .map(|e| html_escape(&e))
+            .unwrap_or_else(|| "-".to_string());
 
         let evidence_cell = flow
             .commands
@@ -375,9 +473,18 @@ fn generate_summary_html(
         for cmd in &flow.commands {
             let cmd_dur = cmd.duration_ms.unwrap_or(0);
             if let CommandStatus::Failed { error } = &cmd.status {
-                let est_time = (start_dt + chrono::Duration::milliseconds(cumulative_ms as i64)).to_rfc3339();
-                let image_cell = cmd.screenshot_path.as_ref().map(|p| embed_image_thumb(p, report_dir)).unwrap_or_else(|| "-".to_string());
-                let video_cell = flow.video_path.as_ref().map(|p| short_path_link(p, report_dir)).unwrap_or_else(|| "-".to_string());
+                let est_time =
+                    (start_dt + chrono::Duration::milliseconds(cumulative_ms as i64)).to_rfc3339();
+                let image_cell = cmd
+                    .screenshot_path
+                    .as_ref()
+                    .map(|p| embed_image_thumb(p, report_dir))
+                    .unwrap_or_else(|| "-".to_string());
+                let video_cell = flow
+                    .video_path
+                    .as_ref()
+                    .map(|p| short_path_link(p, report_dir))
+                    .unwrap_or_else(|| "-".to_string());
                 failure_rows.push_str(&format!(
                     r#"<tr><td>{tc_id} / step_{idx}_{cname}</td><td>{time}</td><td>CMD_{idx}</td><td>{err}</td><td>{img}</td><td>{vid}</td></tr>"#,
                     tc_id = tc_id,
@@ -410,13 +517,28 @@ fn generate_summary_html(
     }
     if !failed_names.is_empty() {
         let shown: Vec<&str> = failed_names.iter().take(5).map(|s| s.as_str()).collect();
-        let suffix = if failed_names.len() > 5 { format!(" và {} testcase khác", failed_names.len() - 5) } else { String::new() };
-        findings.push(format!("{} testcase thất bại: {}{}.", failed_names.len(), shown.join(", "), suffix));
+        let suffix = if failed_names.len() > 5 {
+            format!(" và {} testcase khác", failed_names.len() - 5)
+        } else {
+            String::new()
+        };
+        findings.push(format!(
+            "{} testcase thất bại: {}{}.",
+            failed_names.len(),
+            shown.join(", "),
+            suffix
+        ));
     }
     if total_retries > 0 {
-        findings.push(format!("Có {} lượt retry trong phiên - đáng xem lại độ ổn định của các bước liên quan.", total_retries));
+        findings.push(format!(
+            "Có {} lượt retry trong phiên - đáng xem lại độ ổn định của các bước liên quan.",
+            total_retries
+        ));
     }
-    findings.push(format!("Tổng thời gian chạy: {}.", format_duration(duration_ms)));
+    findings.push(format!(
+        "Tổng thời gian chạy: {}.",
+        format_duration(duration_ms)
+    ));
     let findings_html = findings
         .iter()
         .map(|f| format!("<li>{}</li>", html_escape(f)))
@@ -444,7 +566,10 @@ fn generate_summary_html(
         attachment_rows = r#"<tr><td colspan='3' style='text-align:center;color:#64748b'>Không có tài liệu đính kèm</td></tr>"#.to_string();
     }
 
-    let report_title = title.filter(|s| !s.is_empty()).map(html_escape).unwrap_or_else(|| "Báo cáo kết quả test".to_string());
+    let report_title = title
+        .filter(|s| !s.is_empty())
+        .map(html_escape)
+        .unwrap_or_else(|| "Báo cáo kết quả test".to_string());
 
     let run_history_section = output_dir
         .map(|dir| {
@@ -453,7 +578,16 @@ fn generate_summary_html(
             render_run_history(&entries)
         })
         .unwrap_or_default();
-    let (overall_class, overall_text) = if overall_pass { ("overall-pass", "PASS") } else { ("overall-fail", "FAIL") };
+    let multi_target_section = results
+        .multi_target
+        .as_ref()
+        .map(render_multi_target_section)
+        .unwrap_or_default();
+    let (overall_class, overall_text) = if overall_pass {
+        ("overall-pass", "PASS")
+    } else {
+        ("overall-fail", "FAIL")
+    };
 
     format!(
         r##"<!doctype html><html lang="vi"><head><meta charset="utf-8">
@@ -513,6 +647,7 @@ hr{{border:0;border-top:1px solid #e3e8ef;margin:7px 0}}.status{{display:inline-
 <section class="chart-panel"><h3>Thời gian thực thi theo lần chạy</h3>{duration_rows}</section></div>
 <h2>2. Môi trường test</h2>
 <div class="table-wrap"><table class="env-table"><colgroup><col><col></colgroup><thead><tr><th>Nội dung</th><th>Chi tiết</th></tr></thead><tbody>{env_rows}</tbody></table></div>
+{multi_target_section}
 <h2>3. Nội dung kiểm tra</h2>
 <div class="toolbar">
     <input type="text" id="tcSearch" placeholder="Tìm theo ID hoặc tên testcase..." onkeyup="filterTestRows()">
@@ -573,9 +708,125 @@ filterTestRows();
         env_rows = env_rows,
         test_rows = test_rows,
         run_history_section = run_history_section,
+        multi_target_section = multi_target_section,
         failure_rows = failure_rows,
         attachment_rows = attachment_rows,
     )
+}
+
+fn render_multi_target_section(metadata: &MultiTargetReportMetadata) -> String {
+    let adapters = if metadata.adapters.is_empty() {
+        "Not captured".to_string()
+    } else {
+        metadata
+            .adapters
+            .iter()
+            .map(|adapter| html_escape(adapter))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut operation_rows = String::new();
+    for operation in &metadata.operations {
+        operation_rows.push_str(&render_multi_target_operation_row(operation));
+    }
+    if operation_rows.is_empty() {
+        operation_rows = "<tr><td colspan=\"9\" style=\"text-align:center;color:#64748b\">Not captured</td></tr>".to_string();
+    }
+
+    let hc_section = metadata
+        .hc
+        .as_ref()
+        .map(render_hc_summary_section)
+        .unwrap_or_default();
+
+    format!(
+        r#"<h2>Multi-target execution</h2>
+<div class="table-wrap"><table class="env-table"><tbody>
+<tr><th>Adapters</th><td>{adapters}</td></tr>
+<tr><th>Repeat count</th><td>{repeat_count}</td></tr>
+<tr><th>Operation count</th><td>{operation_count}</td></tr>
+</tbody></table></div>
+<h2>Operation details</h2>
+<div class="table-wrap"><table class="test-table"><thead><tr><th>#</th><th>Repeat</th><th>Target</th><th>Command</th><th>Adapter</th><th>Status</th><th>Category</th><th>Message</th><th>Evidence</th></tr></thead><tbody>{operation_rows}</tbody></table></div>
+{hc_section}"#,
+        adapters = adapters,
+        repeat_count = metadata.repeat_count,
+        operation_count = metadata.operation_count,
+        operation_rows = operation_rows,
+        hc_section = hc_section,
+    )
+}
+
+fn render_multi_target_operation_row(operation: &MultiTargetOperationReport) -> String {
+    let status_class = match operation.status.as_str() {
+        "passed" => "status-pass",
+        "blocked" => "status-blocked",
+        "error" => "status-error",
+        _ => "status-fail",
+    };
+    let evidence = operation
+        .normalized_evidence
+        .as_ref()
+        .map(compact_json)
+        .unwrap_or_else(|| "Not captured".to_string());
+    format!(
+        r#"<tr><td>{sequence}</td><td>{repeat}</td><td>{target}</td><td><code>{command}</code></td><td>{adapter}</td><td><span class="status {status_class}">{status}</span></td><td>{category}</td><td>{message}</td><td><code>{evidence}</code></td></tr>"#,
+        sequence = operation.sequence,
+        repeat = operation.repeat_index + 1,
+        target = html_escape(&operation.target),
+        command = html_escape(&operation.command),
+        adapter = html_escape(&operation.adapter),
+        status_class = status_class,
+        status = html_escape(&operation.status),
+        category = html_escape(&operation.category),
+        message = html_escape(&operation.message),
+        evidence = html_escape(&evidence),
+    )
+}
+
+fn render_hc_summary_section(metadata: &HcReportMetadata) -> String {
+    let devices = if metadata.device_ids.is_empty() {
+        "Not captured".to_string()
+    } else {
+        metadata
+            .device_ids
+            .iter()
+            .map(|device| html_escape(device))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut rows = String::new();
+    for readback in &metadata.readbacks {
+        let values = readback
+            .values
+            .as_ref()
+            .map(compact_json)
+            .unwrap_or_else(|| "Not captured".to_string());
+        rows.push_str(&format!(
+            r#"<tr><td>{}</td><td>{}</td><td>{}</td><td><span class="status {}">{}</span></td><td><code>{}</code></td><td>{}</td></tr>"#,
+            readback.device_id.as_deref().map(html_escape).unwrap_or_else(|| "Not captured".to_string()),
+            readback.repeat_index + 1,
+            html_escape(&readback.command),
+            if readback.status == "passed" { "status-pass" } else { "status-fail" },
+            html_escape(&readback.status),
+            html_escape(&values),
+            html_escape(&readback.message),
+        ));
+    }
+    if rows.is_empty() {
+        rows = "<tr><td colspan=\"6\" style=\"text-align:center;color:#64748b\">Not captured</td></tr>".to_string();
+    }
+    format!(
+        r#"<h2>HC device/readback</h2>
+<div class="table-wrap"><table class="env-table"><tbody><tr><th>Devices</th><td>{devices}</td></tr></tbody></table></div>
+<div class="table-wrap"><table class="test-table"><thead><tr><th>Device</th><th>Repeat</th><th>Command</th><th>Status</th><th>Readback</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table></div>"#,
+        devices = devices,
+        rows = rows,
+    )
+}
+
+fn compact_json(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "Not captured".to_string())
 }
 
 /// Builds the conic-gradient string plus centered percentage labels for non-trivial
@@ -662,7 +913,12 @@ fn embed_image_thumb(path: &str, report_dir: &Path) -> String {
             let mut buf = Vec::new();
             let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut buf);
             if encoder
-                .encode(&thumb, thumb.width(), thumb.height(), image::ColorType::Rgb8)
+                .encode(
+                    &thumb,
+                    thumb.width(),
+                    thumb.height(),
+                    image::ColorType::Rgb8,
+                )
                 .is_ok()
             {
                 Some(format!("data:image/webp;base64,{}", STANDARD.encode(&buf)))
@@ -699,7 +955,10 @@ fn embed_image_thumb(path: &str, report_dir: &Path) -> String {
 /// paths don't blow out table columns and the link still resolves wherever the
 /// report is opened from.
 fn short_path_link(path: &str, report_dir: &Path) -> String {
-    let basename = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
+    let basename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
     format!(
         r#"<a href="{href}" title="{full}">{short}</a>"#,
         href = html_escape(&relative_href(report_dir, path)),
@@ -711,7 +970,11 @@ fn short_path_link(path: &str, report_dir: &Path) -> String {
 fn render_pie_legend(segments: &[PieSegment], total: f64) -> String {
     let mut html = String::new();
     for seg in segments {
-        let pct = if total > 0.0 { seg.value / total * 100.0 } else { 0.0 };
+        let pct = if total > 0.0 {
+            seg.value / total * 100.0
+        } else {
+            0.0
+        };
         html.push_str(&format!(
             r#"<div class="legend-item"><span class="legend-swatch {class}"></span><span>{label}</span><strong>{value} ({pct:.2}%)</strong></div>"#,
             class = seg.class,

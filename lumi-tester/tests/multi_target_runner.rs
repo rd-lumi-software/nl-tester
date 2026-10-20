@@ -574,6 +574,15 @@ fn command_index_and_repeat_options_route_only_selected_root_flow() {
     let report = runner.run().unwrap();
 
     assert_eq!(report.operations.len(), 4);
+    assert_eq!(report.repeat_count, 2);
+    assert_eq!(
+        report
+            .operations
+            .iter()
+            .map(|operation| operation.repeat_index)
+            .collect::<Vec<_>>(),
+        vec![0, 0, 1, 1]
+    );
     assert!(report
         .operations
         .iter()
@@ -834,6 +843,44 @@ fn multi_target_artifacts_keep_legacy_report_reader_shape_additively() {
 }
 
 #[test]
+fn multi_target_report_uses_summary_renderer_and_preserves_operation_metadata() {
+    let mut runner = fixture_runner("parent.yaml");
+    let report = runner.run().unwrap();
+    let output = unique_temp_dir("summary-report");
+    MultiTargetRunner::write_artifacts(&report, &output).unwrap();
+
+    let artifact: Value =
+        serde_json::from_str(&std::fs::read_to_string(output.join("test-results.json")).unwrap())
+            .unwrap();
+    let html = std::fs::read_to_string(output.join("report.html")).unwrap();
+
+    assert_eq!(
+        artifact["multiTarget"]["operationCount"],
+        report.operations.len()
+    );
+    assert_eq!(artifact["multiTarget"]["repeatCount"], 1);
+    assert!(artifact["multiTarget"]["operations"].is_array());
+    assert!(html.contains("Multi-target execution"));
+    assert!(html.contains("Operation details"));
+    assert!(html.contains("lumi_hc_mock"));
+    assert!(html.contains("hcControl"));
+
+    let _ = std::fs::remove_dir_all(output);
+}
+
+#[test]
+fn multi_target_summary_handles_missing_evidence_without_failing() {
+    let report = report_with_result(AdapterResult::passed("lumi_hc"));
+    let output = unique_temp_dir("summary-missing-evidence");
+    MultiTargetRunner::write_artifacts(&report, &output).unwrap();
+
+    let html = std::fs::read_to_string(output.join("report.html")).unwrap();
+    assert!(html.contains("Not captured"));
+
+    let _ = std::fs::remove_dir_all(output);
+}
+
+#[test]
 fn multi_target_artifact_flags_do_not_force_optional_outputs() {
     let mut runner = fixture_runner("parent.yaml");
     let report = runner.run().unwrap();
@@ -868,6 +915,7 @@ fn report_with_result(result: AdapterResult) -> lumi_tester::adapter::MultiTarge
         failed: usize::from(status == AdapterStatus::Failed),
         blocked: usize::from(status == AdapterStatus::Blocked),
         errors: usize::from(status == AdapterStatus::Error),
+        repeat_count: 1,
         operations: vec![lumi_tester::adapter::OperationRecord {
             session_id: "session-test".into(),
             target: TargetId::Gateway,
@@ -877,6 +925,7 @@ fn report_with_result(result: AdapterResult) -> lumi_tester::adapter::MultiTarge
             command_index: 0,
             depth: 0,
             correlation_id: "correlation-test".into(),
+            repeat_index: 0,
             profile: None,
             result,
         }],

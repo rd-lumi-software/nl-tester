@@ -10,12 +10,11 @@ use lumi_tester::hc::backends::v3::runtime::http::{
     default_evidence, HcHttpAdapter, HttpMethod, HttpResponse, MockHttpTransport,
 };
 use lumi_tester::hc::backends::v3::runtime::result::{
-    classify_health, readback_matches, V3Category, V3Result, V3Status, EvidenceTier,
-    RequestedChange,
+    classify_health, readback_matches, EvidenceTier, RequestedChange, V3Category, V3Result,
+    V3Status,
 };
 use lumi_tester::hc::backends::v3::runtime::types::{
-    V3Command, V3EntityParams, V3ExpectParams, V3IndexedValue, V3StateParams,
-    V3SubscribeParams,
+    V3Command, V3EntityParams, V3ExpectParams, V3IndexedValue, V3StateParams, V3SubscribeParams,
 };
 use lumi_tester::hc::backends::v3::runtime::websocket::{
     HcWsAdapter, HcWsError, MockWebSocketTransport, WsConnection, WsTransport, WsTransportError,
@@ -450,10 +449,12 @@ async fn mock_wire_shapes_match_v3_http_and_websocket_contract() {
     assert!(
         http.control(
             &device_id,
-            &[lumi_tester::hc::backends::v3::runtime::http::ControlChange {
-                idx: 0,
-                value: Value::Bool(true),
-            }]
+            &[
+                lumi_tester::hc::backends::v3::runtime::http::ControlChange {
+                    idx: 0,
+                    value: Value::Bool(true),
+                }
+            ]
         )
         .await
         .unwrap()
@@ -463,7 +464,7 @@ async fn mock_wire_shapes_match_v3_http_and_websocket_contract() {
     let requests = http_inspect.requests();
     assert_eq!(requests[0].method, HttpMethod::Get);
     assert_eq!(requests[0].url, "http://hc.test/api/health_check");
-    assert_eq!(requests[1].url, "http://hc.test/api/devices/");
+    assert_eq!(requests[1].url, "http://hc.test/api/devices");
     assert_eq!(
         requests[2].url,
         "http://hc.test/api/devices/9007199254740993/state"
@@ -562,10 +563,12 @@ async fn http_control_requires_bounded_readback_and_normalized_evidence() {
     let response = http
         .control(
             &DecimalId::from_u64(42),
-            &[lumi_tester::hc::backends::v3::runtime::http::ControlChange {
-                idx: 0,
-                value: Value::Bool(true),
-            }],
+            &[
+                lumi_tester::hc::backends::v3::runtime::http::ControlChange {
+                    idx: 0,
+                    value: Value::Bool(true),
+                },
+            ],
         )
         .await
         .unwrap();
@@ -607,10 +610,12 @@ async fn http_control_status_true_cannot_hide_readback_mismatch() {
     let result = http
         .control(
             &DecimalId::from_u64(42),
-            &[lumi_tester::hc::backends::v3::runtime::http::ControlChange {
-                idx: 0,
-                value: Value::Bool(true),
-            }],
+            &[
+                lumi_tester::hc::backends::v3::runtime::http::ControlChange {
+                    idx: 0,
+                    value: Value::Bool(true),
+                },
+            ],
         )
         .await;
 

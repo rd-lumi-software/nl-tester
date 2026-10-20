@@ -1,4 +1,6 @@
-use super::canonical::{map_device_entity, map_state_vector, CanonicalEntity, DecimalId, SlotState, StateSource};
+use super::canonical::{
+    map_device_entity, map_state_vector, CanonicalEntity, DecimalId, SlotState, StateSource,
+};
 use super::evidence::{EvidenceCaptureError, EvidenceCollector, EvidenceKind, EvidenceRecord};
 use super::result::{readback_matches, RequestedChange};
 use async_trait::async_trait;
@@ -46,7 +48,11 @@ pub enum HttpTransportError {
 
 #[async_trait]
 pub trait HttpTransport: Send + Sync {
-    async fn send(&self, request: HttpRequest, timeout: Duration) -> Result<HttpResponse, HttpTransportError>;
+    async fn send(
+        &self,
+        request: HttpRequest,
+        timeout: Duration,
+    ) -> Result<HttpResponse, HttpTransportError>;
 }
 
 #[derive(Clone, Default)]
@@ -56,13 +62,19 @@ pub struct ReqwestHttpTransport {
 
 impl ReqwestHttpTransport {
     pub fn new() -> Result<Self, reqwest::Error> {
-        Ok(Self { client: reqwest::Client::builder().build()? })
+        Ok(Self {
+            client: reqwest::Client::builder().build()?,
+        })
     }
 }
 
 #[async_trait]
 impl HttpTransport for ReqwestHttpTransport {
-    async fn send(&self, request: HttpRequest, timeout: Duration) -> Result<HttpResponse, HttpTransportError> {
+    async fn send(
+        &self,
+        request: HttpRequest,
+        timeout: Duration,
+    ) -> Result<HttpResponse, HttpTransportError> {
         let method = match request.method {
             HttpMethod::Get => reqwest::Method::GET,
             HttpMethod::Post => reqwest::Method::POST,
@@ -91,14 +103,20 @@ pub enum HcHttpError {
     #[error("HTTP response timed out")]
     Timeout,
     #[error("HTTP status {status} returned {code}: {message}")]
-    HttpStatus { status: u16, code: String, message: String },
+    HttpStatus {
+        status: u16,
+        code: String,
+        message: String,
+    },
     #[error("HTTP status {status} returned malformed JSON")]
     MalformedJson { status: u16 },
     #[error("HTTP response payload is invalid: {0}")]
     InvalidPayload(String),
     #[error("HTTP control was blocked: {0}")]
     Blocked(String),
-    #[error("HTTP control readback mismatch for entity {entity} after {attempts} bounded attempt(s)")]
+    #[error(
+        "HTTP control readback mismatch for entity {entity} after {attempts} bounded attempt(s)"
+    )]
     ReadbackMismatch { entity: String, attempts: u64 },
     #[error("evidence capture failed: {0}")]
     Evidence(String),
@@ -160,7 +178,9 @@ impl<T> HcHttpAdapter<T> {
         evidence: EvidenceCollector,
     ) -> Result<Self, HcHttpError> {
         if safe_get_max_attempts == 0 {
-            return Err(HcHttpError::InvalidPayload("safe GET attempts must be positive".into()));
+            return Err(HcHttpError::InvalidPayload(
+                "safe GET attempts must be positive".into(),
+            ));
         }
         Ok(Self {
             transport,
@@ -179,11 +199,15 @@ impl<T> HcHttpAdapter<T> {
     where
         T: HttpTransport,
     {
-        let (response, evidence) = self.request_json(HttpMethod::Get, "/api/health_check", None, true).await?;
+        let (response, evidence) = self
+            .request_json(HttpMethod::Get, "/api/health_check", None, true)
+            .await?;
         let status = response
             .get("status")
             .and_then(Value::as_bool)
-            .ok_or_else(|| HcHttpError::InvalidPayload("health response requires boolean status".into()))?;
+            .ok_or_else(|| {
+                HcHttpError::InvalidPayload("health response requires boolean status".into())
+            })?;
         Ok(HealthResponse { status, evidence })
     }
 
@@ -192,10 +216,13 @@ impl<T> HcHttpAdapter<T> {
         T: HttpTransport,
     {
         // v3 source registration is route("/") nested under /api/devices.
-        let (response, evidence) = self.request_json(HttpMethod::Get, "/api/devices/", None, true).await?;
-        let values = response
-            .as_array()
-            .ok_or_else(|| HcHttpError::InvalidPayload("discovery response must be an array".into()))?;
+        // The deployed HC exposes the canonical collection URL without a trailing slash.
+        let (response, evidence) = self
+            .request_json(HttpMethod::Get, "/api/devices", None, true)
+            .await?;
+        let values = response.as_array().ok_or_else(|| {
+            HcHttpError::InvalidPayload("discovery response must be an array".into())
+        })?;
         let entities = values
             .iter()
             .map(map_device_entity)
@@ -209,11 +236,18 @@ impl<T> HcHttpAdapter<T> {
         T: HttpTransport,
     {
         let path = format!("/api/devices/{}/state", device_id.as_str());
-        let (response, evidence) = self.request_json(HttpMethod::Get, &path, None, true).await?;
+        let (response, evidence) = self
+            .request_json(HttpMethod::Get, &path, None, true)
+            .await?;
         let entity = minimal_entity(device_id);
         let observed_at = chrono::Utc::now().to_rfc3339();
-        let states = map_state_vector(&entity.entity, &response, observed_at, StateSource::HttpState)
-            .map_err(|error| HcHttpError::InvalidPayload(error.to_string()))?;
+        let states = map_state_vector(
+            &entity.entity,
+            &response,
+            observed_at,
+            StateSource::HttpState,
+        )
+        .map_err(|error| HcHttpError::InvalidPayload(error.to_string()))?;
         Ok(StateResponse { states, evidence })
     }
 
@@ -226,7 +260,9 @@ impl<T> HcHttpAdapter<T> {
         T: HttpTransport,
     {
         if changes.is_empty() {
-            return Err(HcHttpError::InvalidPayload("control changes must not be empty".into()));
+            return Err(HcHttpError::InvalidPayload(
+                "control changes must not be empty".into(),
+            ));
         }
         let body = changes
             .iter()
@@ -234,11 +270,15 @@ impl<T> HcHttpAdapter<T> {
             .collect::<Vec<_>>();
         let path = format!("/api/devices/{}/control", device_id.as_str());
         // This call deliberately passes safe_get=false: control POST is never retried.
-        let (response, evidence) = self.request_json(HttpMethod::Post, &path, Some(Value::Array(body)), false).await?;
+        let (response, evidence) = self
+            .request_json(HttpMethod::Post, &path, Some(Value::Array(body)), false)
+            .await?;
         let dispatched = response
             .get("status")
             .and_then(Value::as_bool)
-            .ok_or_else(|| HcHttpError::InvalidPayload("control response requires boolean status".into()))?;
+            .ok_or_else(|| {
+                HcHttpError::InvalidPayload("control response requires boolean status".into())
+            })?;
         if !dispatched {
             return Err(HcHttpError::Blocked(
                 "control response returned status=false".into(),
@@ -311,7 +351,11 @@ impl<T> HcHttpAdapter<T> {
             "body": body,
         });
         let request_evidence = self.capture(EvidenceKind::HttpRequest, &request_value)?;
-        let attempts = if safe_get { self.safe_get_max_attempts } else { 1 };
+        let attempts = if safe_get {
+            self.safe_get_max_attempts
+        } else {
+            1
+        };
         let mut last_transport = None;
         for _ in 0..attempts {
             match self.transport.send(request.clone(), self.timeout).await {
@@ -321,35 +365,65 @@ impl<T> HcHttpAdapter<T> {
                         Ok(value) => value.clone(),
                         Err(_) => Value::String(response.body.clone()),
                     };
-                    let response_evidence = self.capture(EvidenceKind::HttpResponse, &json!({
-                        "status": response.status,
-                        "body": response_value,
-                    }))?;
-                    let response_json = parsed.map_err(|_| HcHttpError::MalformedJson { status: response.status })?;
+                    let response_evidence = self.capture(
+                        EvidenceKind::HttpResponse,
+                        &json!({
+                            "status": response.status,
+                            "body": response_value,
+                        }),
+                    )?;
+                    let response_json = parsed.map_err(|_| HcHttpError::MalformedJson {
+                        status: response.status,
+                    })?;
                     if !(200..300).contains(&response.status) {
                         return Err(domain_error(response.status, &response_json));
                     }
-                    return Ok((response_json, HttpCallEvidence { request: request_evidence, response: response_evidence }));
+                    return Ok((
+                        response_json,
+                        HttpCallEvidence {
+                            request: request_evidence,
+                            response: response_evidence,
+                        },
+                    ));
                 }
                 Err(HttpTransportError::Timeout) => return Err(HcHttpError::Timeout),
                 Err(HttpTransportError::Transport(error)) => last_transport = Some(error),
             }
         }
-        Err(HcHttpError::Transport(last_transport.unwrap_or_else(|| "request failed".into())))
+        Err(HcHttpError::Transport(
+            last_transport.unwrap_or_else(|| "request failed".into()),
+        ))
     }
 
-    fn capture(&mut self, kind: EvidenceKind, value: &Value) -> Result<EvidenceRecord, HcHttpError> {
-        self.evidence.capture_json(kind, value).map_err(|error| HcHttpError::Evidence(error.to_string()))
+    fn capture(
+        &mut self,
+        kind: EvidenceKind,
+        value: &Value,
+    ) -> Result<EvidenceRecord, HcHttpError> {
+        self.evidence
+            .capture_json(kind, value)
+            .map_err(|error| HcHttpError::Evidence(error.to_string()))
     }
 }
 
 fn domain_error(status: u16, value: &Value) -> HcHttpError {
     if let Some(object) = value.as_object() {
-        if let (Some(code), Some(message)) = (object.get("code").and_then(Value::as_str), object.get("msg").and_then(Value::as_str)) {
-            return HcHttpError::HttpStatus { status, code: code.into(), message: message.into() };
+        if let (Some(code), Some(message)) = (
+            object.get("code").and_then(Value::as_str),
+            object.get("msg").and_then(Value::as_str),
+        ) {
+            return HcHttpError::HttpStatus {
+                status,
+                code: code.into(),
+                message: message.into(),
+            };
         }
     }
-    HcHttpError::HttpStatus { status, code: "HTTP_ERROR".into(), message: value.to_string() }
+    HcHttpError::HttpStatus {
+        status,
+        code: "HTTP_ERROR".into(),
+        message: value.to_string(),
+    }
 }
 
 fn minimal_entity(device_id: &DecimalId) -> CanonicalEntity {
@@ -374,7 +448,9 @@ pub struct MockHttpTransport {
 }
 
 impl MockHttpTransport {
-    pub fn new(responses: impl IntoIterator<Item = Result<HttpResponse, HttpTransportError>>) -> Self {
+    pub fn new(
+        responses: impl IntoIterator<Item = Result<HttpResponse, HttpTransportError>>,
+    ) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
             requests: Arc::new(Mutex::new(Vec::new())),
@@ -388,19 +464,42 @@ impl MockHttpTransport {
 
 #[async_trait]
 impl HttpTransport for MockHttpTransport {
-    async fn send(&self, request: HttpRequest, _timeout: Duration) -> Result<HttpResponse, HttpTransportError> {
+    async fn send(
+        &self,
+        request: HttpRequest,
+        _timeout: Duration,
+    ) -> Result<HttpResponse, HttpTransportError> {
         self.requests.lock().unwrap().push(request);
-        self.responses.lock().unwrap().pop_front().unwrap_or_else(|| {
-            Err(HttpTransportError::Transport("mock response queue exhausted".into()))
-        })
+        self.responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| {
+                Err(HttpTransportError::Transport(
+                    "mock response queue exhausted".into(),
+                ))
+            })
     }
 }
 
-pub fn default_evidence(max_raw_bytes: usize, max_websocket_frames: usize) -> Result<EvidenceCollector, EvidenceCaptureError> {
+pub fn default_evidence(
+    max_raw_bytes: usize,
+    max_websocket_frames: usize,
+) -> Result<EvidenceCollector, EvidenceCaptureError> {
     EvidenceCollector::new(super::evidence::EvidenceConfig {
         max_raw_bytes,
         max_websocket_frames,
-        redact_fields: vec!["dev_key", "nwk_key", "app_key", "authorization", "cookie", "token"].into_iter().map(String::from).collect(),
+        redact_fields: vec![
+            "dev_key",
+            "nwk_key",
+            "app_key",
+            "authorization",
+            "cookie",
+            "token",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
     })
 }
 
@@ -420,22 +519,54 @@ mod tests {
             Ok(HttpResponse { status: 200, body: r#"[true]"#.into() }),
         ]);
         let inspect = mock.clone();
-        let mut adapter = HcHttpAdapter::new(mock, "http://hc.test", Duration::from_millis(50), 2, evidence()).unwrap();
+        let mut adapter = HcHttpAdapter::new(
+            mock,
+            "http://hc.test",
+            Duration::from_millis(50),
+            2,
+            evidence(),
+        )
+        .unwrap();
         let discovery = adapter.discover().await.unwrap();
-        assert_eq!(discovery.entities[0].entity.device_id.as_str(), "9007199254740993");
-        let control = adapter.control(&DecimalId::from_u64(42), &[ControlChange { idx: 0, value: Value::Bool(true) }]).await.unwrap();
+        assert_eq!(
+            discovery.entities[0].entity.device_id.as_str(),
+            "9007199254740993"
+        );
+        let control = adapter
+            .control(
+                &DecimalId::from_u64(42),
+                &[ControlChange {
+                    idx: 0,
+                    value: Value::Bool(true),
+                }],
+            )
+            .await
+            .unwrap();
         assert!(control.dispatched);
         let requests = inspect.requests();
-        assert_eq!(requests[0].url, "http://hc.test/api/devices/");
+        assert_eq!(requests[0].url, "http://hc.test/api/devices");
         assert_eq!(requests[1].url, "http://hc.test/api/devices/42/control");
         assert_eq!(requests[1].method, HttpMethod::Post);
     }
 
     #[tokio::test]
     async fn malformed_json_is_error_with_bounded_raw_evidence() {
-        let mock = MockHttpTransport::new([Ok(HttpResponse { status: 200, body: "not-json".into() })]);
-        let mut adapter = HcHttpAdapter::new(mock, "http://hc.test", Duration::from_millis(50), 1, evidence()).unwrap();
-        assert!(matches!(adapter.health().await, Err(HcHttpError::MalformedJson { .. })));
+        let mock = MockHttpTransport::new([Ok(HttpResponse {
+            status: 200,
+            body: "not-json".into(),
+        })]);
+        let mut adapter = HcHttpAdapter::new(
+            mock,
+            "http://hc.test",
+            Duration::from_millis(50),
+            1,
+            evidence(),
+        )
+        .unwrap();
+        assert!(matches!(
+            adapter.health().await,
+            Err(HcHttpError::MalformedJson { .. })
+        ));
         assert_eq!(adapter.evidence().len(), 2);
     }
 }
