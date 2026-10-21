@@ -145,3 +145,19 @@ python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-schema
 # Run preflight check on a YAML flow
 python3 ~/.codex/skills/lumi-tester-agent/scripts/lumi_agent.py agent-check path/to/test.yaml
 ```
+
+## 9. HC Agent & CLI Workflow
+
+For hardware-controller (HC) tests – including natural-language agent requests and
+developer CLI execution – see the dedicated Vietnamese guide:
+
+➜ **[hc-agent-cli-guide.md](hc-agent-cli-guide.md)**
+
+The guide covers:
+- Architecture diagram (Orchestrator ↔ Tester-agent ↔ HC gateway)
+- Mandatory intake gate and intake record schema
+- Handoff plan format and result semantics
+- Both skill usage recipes (orchestrator + tester-agent)
+- PowerShell CLI command sequence (validate / list / run / repeat / debug)
+- Artifact reading and failure table
+- Future App → Cloud → HC extension roadmap

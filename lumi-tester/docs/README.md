@@ -29,6 +29,9 @@ Tự động hóa gạt công tắc vật lý (Servo), điều khiển nguồn (
 ### [Tích hợp Kỹ năng AI (AI Skills & MCP)](ai-skills-integration.md)
 Hướng dẫn tích hợp kỹ năng kiểm thử tự động Lumi Tester vào Google Antigravity, OpenAI Codex, Claude Code, Cursor và cấu hình Lumi Tester MCP Server.
 
+### [HC Agent & CLI Guide](hc-agent-cli-guide.md)
+Hướng dẫn tiếng Việt toàn diện cho hai đối tượng: (1) người dùng gửi yêu cầu kiểm thử HC bằng ngôn ngữ tự nhiên cho AI agent; (2) developer chạy thư viện HC test có sẵn từ CLI. Bao gồm sơ đồ kiến trúc Mermaid, intake gate, handoff plan, CLI command sequence, bảng debug failure, và lộ trình mở rộng App → Cloud → HC.
+
 ### [Luồng thực thi Test](flows/test_execution_flow.md)
 Hiểu về vòng đời của một phiên test, từ lúc đọc file YAML đến khi tương tác thiết bị.
 
