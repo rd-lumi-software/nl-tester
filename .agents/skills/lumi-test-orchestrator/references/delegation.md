@@ -82,6 +82,14 @@ error that remains quarantined and does not stop independent targets; an
 `error` response without target results is a delegation-level error and stops
 the remaining run.
 
+When discovery succeeds technically but a required target-dependent scenario
+has no eligible target, return `status: blocked` with
+`runtimeStatus: blocked`, retain `no_eligible_targets` in `unresolved` or the
+scenario reason, and do not create or run a mutating flow. The aggregate/report
+must add the planned scenario with execution/lifecycle `not_run`; an empty
+`targetResults` list must not erase that scenario. A technical-only discovery
+response may remain `passed` when its declared assertions pass.
+
 Validate the response mechanically before aggregation:
 
 ```bash

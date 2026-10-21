@@ -55,6 +55,12 @@ Every mutating scenario must describe:
 5. timeout and retry policy;
 6. restoration action and expected final state.
 
+Before execution, also classify each requested check as either a technical
+check or a target-dependent scenario. A technical check has no target
+requirement and may pass on a valid empty response. A target-dependent
+scenario requires resolved eligible targets and must remain in the coverage
+matrix even when discovery returns zero targets.
+
 The orchestrator can request a family of scenarios, but it must not silently
 expand a simple smoke request into destructive stress testing. Expansion such
 as boundary values, rapid toggles, repeat cycles, or concurrent batches must be
@@ -71,6 +77,16 @@ listed as additional scenarios and approved by the stated test scope.
   as unsupported capability or read-only entity;
 - `error`: execution failed at the transport/runtime boundary without enough
   evidence to decide whether the product assertion passed or failed.
+
+An empty inventory is not inherently an error or a failed technical check. If
+a required target-dependent scenario has no eligible target, keep the
+technical discovery result (for example, `passed`) but record the dependent
+scenario outcome as `blocked` before enqueueing, with
+`no_eligible_targets` as the reason and `not_run` as its execution/lifecycle
+state. If the result model has only one terminal field, use `blocked` and
+retain `not_run` in the scenario matrix/report metadata. The overall business
+result must not be `passed` while a required scenario is in that state. A
+technical-only plan may still be `passed`.
 
 Never convert `blocked` or `skipped` to `failed` merely to make a summary look
 complete. Report coverage as discovered, eligible, executed, and unexecuted.

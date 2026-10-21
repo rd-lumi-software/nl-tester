@@ -118,6 +118,55 @@ the current project supports a Cloud mock, not an unqualified real Cloud claim.
 Do not turn this skill into a second Lumi runner. Do not issue raw HC control
 requests, invent command names, or write command-level YAML from memory.
 
+## Result semantics: technical checks versus requested scenarios
+
+An action result is a technical fact, not automatically the business verdict.
+The delegated runner reports what its commands observed; the orchestrator
+decides whether the requested scenarios were executable and whether the
+requested coverage was achieved. Keep these result layers separate in the
+plan, delegation response, aggregate, and HTML report.
+
+Classify each requested check before delegation:
+
+- **Technical check:** has no target requirement. A successful response and
+  its declared assertion may be `passed` even when the returned inventory is
+  empty. For example, a connectivity or inventory API check can pass with a
+  valid empty collection.
+- **Target-dependent scenario:** requires one or more resolved eligible
+  targets. It must remain visible as a planned scenario even when discovery
+  returns zero eligible targets.
+
+An empty inventory or zero eligible targets is data, not a failure by itself.
+Never make a health/discovery action fail solely because the collection is
+empty, and never make every plan fail solely for that reason. For a required
+target-dependent scenario, however, do not silently drop the scenario or
+report the suite as passed. Use this fixed distinction: the scenario outcome
+is `blocked`, its execution/lifecycle state is `not_run`, and the reason is
+`no_eligible_targets`. If a response schema has only one terminal outcome
+field, use `blocked` and retain `not_run` in the scenario matrix or report
+metadata. Optional target-dependent scenarios must be marked `skipped` only
+when the plan explicitly allows that outcome.
+
+Persist this intent before delegation. In the current v1 plan shape, state the
+technical checks and required target-dependent scenarios in `request` and
+`acceptance`, then retain the scenario matrix in the delegation/aggregate
+artifacts. Do not invent adapter-specific command names or unsupported plan
+fields merely to encode this distinction.
+
+The v1 target list is target-centric. When a required scenario has no entity,
+do not manufacture a fake entity ID just to create a result row. Retain a
+suite-level scenario record in the coverage matrix/report instead. If the
+available aggregate command cannot represent that record, report the
+aggregate as incomplete/blocked and preserve the companion coverage artifact;
+never omit the scenario and claim business success.
+
+The final report must show both layers, for example: technical discovery
+`passed`; target-dependent coverage `blocked`/`not_run`; overall business
+result not `passed`. A technical-only plan may still have an overall `passed`
+result. Do not infer intent from an adapter command name, an HTTP status, or
+the number of returned entities; use the persisted semantic plan and its
+acceptance criteria.
+
 ## Machine-verifiable orchestration gate
 
 Before delegating a plan, validate its semantic contract with the Rust
@@ -251,8 +300,9 @@ Follow these phases in order.
    and Lumi command syntax.
 7. **Aggregate results.** After each target, record its outcome and quarantine
    a failed target without removing independent targets from the queue. Combine
-   discovery, planned, executed, skipped, blocked, passed, failed, error, and
-   `not_run` targets at the end. Preserve per-action evidence paths,
+   discovery, planned scenarios, executed, skipped, blocked, passed, failed,
+   error, and `not_run` targets/scenarios at the end. Preserve per-action
+   evidence paths,
    dispatch/readback timing when available, observed state, expected state,
    final state, and failure reason. Do not collapse `blocked` or `skipped`
    into `passed`, and do not turn a target-local failure into a global block.
@@ -407,13 +457,17 @@ Report these sections in order:
    or `real_e2e`.
 2. Discovery summary and source timestamp.
 3. Capability/mapping decisions and skipped or blocked targets.
-4. Scenario matrix: target, action, repetition, execution mode, expected state.
-5. Results: pass/fail/skipped/blocked/error, dispatch latency, readback latency,
+4. Scenario matrix: scenario intent, target requirement, target, action,
+   repetition, execution mode, expected state, and whether execution occurred.
+5. Results separated into technical checks and requested scenarios:
+   pass/fail/skipped/blocked/error/not_run, dispatch latency, readback latency,
    observed state, final state, and evidence paths.
-6. Restoration status and unresolved risks.
+6. Overall business result, restoration status, and unresolved risks.
 
-Do not report a test as successful merely because an HTTP request returned 2xx;
-the expected state must be verified by the readback contract.
+Do not report a target-dependent stateful scenario as successful merely because
+an HTTP request returned 2xx; its expected state must be verified by the
+readback contract. Technical checks use their own declared response/assertion
+contract.
 
 ## Machine-verifiable orchestration
 

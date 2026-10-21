@@ -7,6 +7,38 @@ The handoff must not be created for a mutating run while required intake values
 are unknown. Use an intake record first and mark unresolved fields explicitly;
 do not rely on Lumi CLI defaults for safety-sensitive policy.
 
+## Intent and coverage contract
+
+The semantic plan must make the requested result scope explicit, even if the
+underlying adapter only executes technical actions. Distinguish:
+
+- technical checks whose assertions do not require a target; and
+- target-dependent scenarios whose required coverage needs one or more
+  eligible targets.
+
+Do not infer this distinction from an adapter command name or from the length
+of the discovered inventory. A valid empty response can satisfy a technical
+check. It cannot silently satisfy a required target-dependent scenario.
+
+In the current v1 plan shape, persist the distinction in the plan's `request`
+and `acceptance` entries, then carry the scenario matrix in delegation and
+aggregate artifacts. Do not add adapter-specific or unsupported top-level
+fields just to represent it.
+
+The v1 `targets` list is target-centric. For a required scenario with no
+entity, do not synthesize a fake target ID. Keep a suite-level scenario record
+in the coverage matrix/report; if the aggregate implementation cannot carry
+that record, mark the aggregate incomplete/blocked and retain the companion
+coverage artifact rather than silently dropping the scenario.
+
+When discovery yields zero eligible targets, retain the requested scenario in
+the scenario/coverage matrix. Record `no_eligible_targets`, do not delegate a
+mutating flow, and represent the scenario outcome as `blocked` before
+execution with an explicit `not_run` execution/lifecycle result. If only one
+terminal outcome is available, use `blocked` and retain `not_run` in report
+metadata. The final aggregate must keep the technical result and business
+coverage result separate.
+
 Connection fields are independent. A supplied host/IP must be retained even
 when scheme, port, or profile is missing. Use `status: partial` and ask only
 for the missing fields. A profile-derived port is a proposal until the user or
@@ -194,7 +226,8 @@ The aggregate result should retain one record per target and scenario:
   reason: "readback timeout on repetition 3"
 ```
 
-Allowed outcomes are `passed`, `failed`, `blocked`, `error`, and `not_run`.
+Allowed outcomes are `passed`, `failed`, `skipped`, `blocked`, `error`, and
+`not_run`.
 The delegation response must retain the phase, generated flow paths, exact
 validate/list/run results, output directory, runtime status, evidence tier,
 and unresolved assumptions.
@@ -241,3 +274,7 @@ failure or error ends in `failed`/`error` and is quarantined; a shared stop
 only moves untouched eligible targets to `not_run`. The orchestrator does not
 trust an agent-provided lifecycle as proof of safety; it derives the aggregate
 lifecycle from the validated outcome and stop reason.
+
+The aggregate must also retain planned scenarios that have no target result.
+Those records are necessary to distinguish “no target was discovered” from
+“the plan did not request a target-dependent scenario.”
